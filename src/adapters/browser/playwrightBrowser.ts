@@ -5,40 +5,83 @@ import type { AppConfig, Logger } from "../../types";
 
 export class PlaywrightBrowserManager {
   private context?: BrowserContext;
+  private contextLaunchPromise?: Promise<BrowserContext>;
 
   constructor(
     private readonly config: AppConfig,
     private readonly logger: Logger
   ) {}
 
-  async getContext(): Promise<BrowserContext> {
-    if (this.context) {
-      return this.context;
+  private isContextUsable(context: BrowserContext): boolean {
+    const browser = context.browser();
+    if (!browser) {
+      return true;
     }
+    return browser.isConnected();
+  }
 
-    this.context = await chromium.launchPersistentContext(this.config.browser.profileDir, {
+  private async launchPersistentContext(): Promise<BrowserContext> {
+    const context = await chromium.launchPersistentContext(this.config.browser.profileDir, {
       headless: this.config.browser.headless,
       channel: this.config.browser.channel,
       viewport: { width: 1440, height: 1024 }
     });
+
+    context.on("close", () => {
+      this.logger.info("Playwright persistent context closed");
+      if (this.context === context) {
+        this.context = undefined;
+      }
+    });
+
+    this.context = context;
 
     this.logger.info("Playwright persistent context initialized", {
       profileDir: this.config.browser.profileDir,
       headless: this.config.browser.headless
     });
 
-    return this.context;
+    return context;
+  }
+
+  async getContext(): Promise<BrowserContext> {
+    if (this.context && this.isContextUsable(this.context)) {
+      return this.context;
+    }
+
+    if (this.context && !this.isContextUsable(this.context)) {
+      this.logger.warn("Browser was closed or disconnected; launching a new persistent context");
+      this.context = undefined;
+    }
+
+    if (!this.contextLaunchPromise) {
+      this.contextLaunchPromise = this.launchPersistentContext().finally(() => {
+        this.contextLaunchPromise = undefined;
+      });
+    }
+
+    return this.contextLaunchPromise;
   }
 
   async getPage(): Promise<Page> {
     const context = await this.getContext();
-    const existingPage = context.pages()[0];
-
-    if (existingPage) {
-      return existingPage;
+    const openPage = context.pages().find((page) => !page.isClosed());
+    if (openPage) {
+      return openPage;
     }
 
-    return context.newPage();
+    try {
+      return await context.newPage();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("has been closed") || message.includes("Target page, context or browser has been closed")) {
+        this.logger.warn("Browser disconnected while opening a page; restarting persistent context", { message });
+        this.context = undefined;
+        const next = await this.getContext();
+        return next.newPage();
+      }
+      throw error;
+    }
   }
 
   async captureFailureScreenshot(page: Page, label: string): Promise<string | undefined> {
@@ -55,11 +98,15 @@ export class PlaywrightBrowserManager {
   }
 
   async close(): Promise<void> {
-    if (!this.context) {
-      return;
+    if (this.contextLaunchPromise) {
+      await this.contextLaunchPromise.catch(() => undefined);
     }
+    this.contextLaunchPromise = undefined;
 
-    await this.context.close();
+    const context = this.context;
     this.context = undefined;
+    if (context) {
+      await context.close().catch(() => undefined);
+    }
   }
 }

@@ -103,7 +103,7 @@ export class TeamsWebAdapter implements MessagingAdapter {
     await this.navigateToTarget(page, target);
 
     const composerCandidates = this.selectorCandidates(page, teamsSelectors.composer);
-    await this.safeType(composerCandidates, text, {
+    await this.safeType(page, composerCandidates, text, {
       label: `teams-composer:${target.label ?? target.url ?? "unknown"}`,
       clearExisting: true
     });
@@ -283,6 +283,16 @@ export class TeamsWebAdapter implements MessagingAdapter {
     await this.ensureTargetWorkspace(page, target);
 
     if (target.label) {
+      if (await this.waitForTargetView(page, target, `teams-target-skip-if-ready:${target.label}`)) {
+        this.logger.info("Teams target already active", {
+          target: target.label,
+          currentUrl: page.url()
+        });
+        return;
+      }
+
+      await this.ensureTeamsWebAppRoot(page);
+      await this.dismissTransientTeamsUi(page);
       await this.navigateToLabel(page, target.label);
 
       const targetReady = await this.waitForTargetView(page, target, `teams-target-label:${target.label}`);
@@ -332,6 +342,26 @@ export class TeamsWebAdapter implements MessagingAdapter {
     throw new Error(`Teams target "${target.label}" did not resolve to a ready chat or channel view.`);
   }
 
+  private teamsWebAppRootUrl(): string {
+    try {
+      const parsed = new URL(this.config.teams.baseUrl);
+      return `${parsed.origin}/v2`;
+    } catch {
+      return `${this.config.teams.baseUrl.replace(/\/$/, "")}/v2`;
+    }
+  }
+
+  private async ensureTeamsWebAppRoot(page: Page): Promise<void> {
+    await this.safeGoto(page, this.teamsWebAppRootUrl(), { label: "teams-webapp-root" });
+  }
+
+  private async dismissTransientTeamsUi(page: Page): Promise<void> {
+    for (let index = 0; index < 3; index += 1) {
+      await page.keyboard.press("Escape").catch(() => undefined);
+      await sleep(120);
+    }
+  }
+
   private async navigateToLabel(page: Page, label: string): Promise<void> {
     const exactLabel = new RegExp(`^${escapeRegex(label)}$`, "i");
     const partialLabel = new RegExp(escapeRegex(label), "i");
@@ -375,7 +405,7 @@ export class TeamsWebAdapter implements MessagingAdapter {
     }
 
     const searchCandidates = this.selectorCandidates(page, teamsSelectors.searchInput);
-    await this.safeType(searchCandidates, label, {
+    await this.safeType(page, searchCandidates, label, {
       label: `teams-target-search:${label}`,
       clearExisting: true
     });
@@ -605,13 +635,13 @@ export class TeamsWebAdapter implements MessagingAdapter {
   }
 
   private async safeType(
+    page: Page,
     candidates: LocatorCandidate[],
     text: string,
     options: { label: string; retries?: number; clearExisting?: boolean }
   ): Promise<void> {
     await withRetry(
       async () => {
-        const page = await this.browser.getPage();
         const { locator, description } = await this.resolveFirstInteractable(candidates, options.label);
         await locator.scrollIntoViewIfNeeded();
         await locator.click({ trial: true, timeout: this.config.teams.selectorTimeoutMs });

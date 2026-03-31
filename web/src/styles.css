@@ -161,6 +161,18 @@ button {
   color: #166534;
 }
 
+.banner--pending {
+  background: #e0e7ff;
+  color: #312e81;
+  border: 1px solid #a5b4fc;
+}
+
+.narrow-note {
+  margin: 0 0 12px 0;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
 .status-pill {
   display: inline-flex;
   align-items: center;
