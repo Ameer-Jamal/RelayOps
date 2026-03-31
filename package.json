@@ -1,0 +1,45 @@
+{
+  "name": "relayops",
+  "version": "0.1.0",
+  "description": "Public-first, local-first automation platform for browser-driven workflows.",
+  "license": "MIT",
+  "private": true,
+  "workspaces": [
+    "web"
+  ],
+  "bin": {
+    "relayops": "./dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "npm run build:api && npm run ui:build",
+    "build:api": "tsc -p tsconfig.json",
+    "dev": "tsx src/main.ts",
+    "dev:api": "tsx src/main.ts",
+    "dev:all": "concurrently \"npm run dev:api\" \"npm run ui:dev\"",
+    "start": "node dist/main.js",
+    "cli": "tsx src/cli/index.ts",
+    "typecheck": "npm run typecheck:api && npm run typecheck --workspace web",
+    "typecheck:api": "tsc --noEmit -p tsconfig.json",
+    "ui:dev": "npm run dev --workspace web",
+    "ui:build": "npm run build --workspace web"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "commander": "^12.1.0",
+    "dotenv": "^16.5.0",
+    "express": "^4.21.2",
+    "node-notifier": "^10.0.1",
+    "playwright": "^1.53.0",
+    "yaml": "^2.8.0",
+    "zod": "^4.1.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.1.0",
+    "@types/node-notifier": "^8.0.5",
+    "concurrently": "^9.1.2",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3"
+  }
+}

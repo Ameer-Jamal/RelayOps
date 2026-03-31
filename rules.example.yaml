@@ -1,0 +1,51 @@
+targets:
+  review_channel:
+    kind: channel
+    label: Example Review Channel
+    url: https://teams.microsoft.com/l/channel/example-placeholder
+
+  inbox_chat:
+    kind: chat
+    label: Example Team Chat
+
+rules:
+  - id: notify-new-pr
+    enabled: true
+    trigger: new_pr
+    dedupeKey: notify-new-pr:{{pr.id}}
+    cooldownMinutes: 5
+    condition:
+      type: not_processed
+    actions:
+      - type: post_message
+        target: review_channel
+        template: |
+          PR ready for review
+
+          Title: {{pr.title}}
+          Author: {{pr.author}}
+          URL: {{pr.url}}
+          Summary: {{summary.text}}
+
+  - id: alert-stale-unread
+    enabled: true
+    trigger: unread_message
+    dedupeKey: alert-stale-unread:{{message.id}}
+    cooldownMinutes: 5
+    conditions:
+      - type: older_than_minutes
+        minutes: 10
+      - type: cooldown_elapsed
+        key: unread:{{message.id}}
+        minutes: 30
+    actions:
+      - type: alert
+        severity: warning
+        title: Stale unread Teams activity
+        message: Unread activity still pending for {{message.label}}.
+
+  - id: clear-alerts-manually
+    enabled: true
+    trigger: manual
+    actions:
+      - type: clear_alerts

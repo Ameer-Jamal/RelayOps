@@ -1,0 +1,20 @@
+[
+  {
+    "id": "pr-1001",
+    "title": "Refactor message dispatch pipeline",
+    "author": "Example Author",
+    "url": "https://example.invalid/pull/1001",
+    "repository": "relayops/example-repo",
+    "createdAt": "2026-03-30T08:00:00.000Z",
+    "description": "Simplifies worker handoff logic and improves retry visibility."
+  },
+  {
+    "id": "pr-1002",
+    "title": "Add unread alert cooldown handling",
+    "author": "Example Author",
+    "url": "https://example.invalid/pull/1002",
+    "repository": "relayops/example-repo",
+    "createdAt": "2026-03-30T09:15:00.000Z",
+    "description": "Adds persistent cooldown storage for alert rules."
+  }
+]
