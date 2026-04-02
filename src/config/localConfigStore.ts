@@ -33,6 +33,11 @@ const ENV_KEY_ORDER = [
   "RELAYOPS_PR_SOURCE_PATH",
   "RELAYOPS_PR_SOURCE_URL",
   "RELAYOPS_PR_SOURCE_LIMIT",
+  "RELAYOPS_BITBUCKET_WORKSPACE",
+  "RELAYOPS_BITBUCKET_USERNAME",
+  "RELAYOPS_BITBUCKET_APP_PASSWORD",
+  "RELAYOPS_BITBUCKET_REPOSITORIES",
+  "RELAYOPS_BITBUCKET_AUTHOR_UUID",
   "RELAYOPS_ALERTS_ENABLED",
   "RELAYOPS_ALERTS_SOUND_ENABLED"
 ] as const;
@@ -78,6 +83,11 @@ export class LocalConfigStore {
     waitForLoginOnStartup: boolean;
     alertsEnabled: boolean;
     alertSoundEnabled: boolean;
+    bitbucketWorkspace: string;
+    bitbucketUsername: string;
+    bitbucketRepositories: string;
+    bitbucketAuthorUuid: string;
+    bitbucketAppPasswordSet: boolean;
     logLevel: SetupConfigView["logLevel"];
   }): SetupConfigView {
     return input;
@@ -97,6 +107,15 @@ export class LocalConfigStore {
     envValues.RELAYOPS_TEAMS_WAIT_FOR_LOGIN_ON_STARTUP = String(input.waitForLoginOnStartup);
     envValues.RELAYOPS_ALERTS_ENABLED = String(input.alertsEnabled);
     envValues.RELAYOPS_ALERTS_SOUND_ENABLED = String(input.alertSoundEnabled);
+    envValues.RELAYOPS_BITBUCKET_WORKSPACE = input.bitbucketWorkspace.trim();
+    envValues.RELAYOPS_BITBUCKET_USERNAME = input.bitbucketUsername.trim();
+    envValues.RELAYOPS_BITBUCKET_REPOSITORIES = input.bitbucketRepositories.trim();
+    envValues.RELAYOPS_BITBUCKET_AUTHOR_UUID = input.bitbucketAuthorUuid.trim();
+    if (input.bitbucketAppPassword && input.bitbucketAppPassword.trim()) {
+      envValues.RELAYOPS_BITBUCKET_APP_PASSWORD = input.bitbucketAppPassword.trim();
+    } else if (!input.bitbucketWorkspace.trim() && !input.bitbucketUsername.trim()) {
+      envValues.RELAYOPS_BITBUCKET_APP_PASSWORD = "";
+    }
     envValues.RELAYOPS_LOG_LEVEL = input.logLevel;
     this.writeEnvValues(envValues);
     return this.getEnvFilePath();

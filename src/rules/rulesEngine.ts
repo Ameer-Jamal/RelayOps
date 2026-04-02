@@ -10,6 +10,7 @@ import type {
   RuleConfig,
   RulesFileConfig,
   SummaryResult,
+  TriggerRunOptions,
   TriggerEvent
 } from "../types";
 import type { AppConfig, Logger, StateStore } from "../types";
@@ -32,14 +33,18 @@ export interface RuleExecutionResult {
 export class RulesEngine {
   constructor(private readonly dependencies: RulesEngineDependencies) {}
 
-  async executeForEvent(event: TriggerEvent, observation: EventObservation): Promise<RuleExecutionResult[]> {
+  async executeForEvent(
+    event: TriggerEvent,
+    observation: EventObservation,
+    options?: TriggerRunOptions
+  ): Promise<RuleExecutionResult[]> {
     const matchingRules = this.dependencies.rules.rules.filter(
       (rule) => rule.enabled !== false && rule.trigger === event.trigger
     );
 
     const results: RuleExecutionResult[] = [];
     for (const rule of matchingRules) {
-      const result = await this.evaluateRule(rule, event, observation);
+      const result = await this.evaluateRule(rule, event, observation, options);
       results.push(result);
     }
 
@@ -49,20 +54,25 @@ export class RulesEngine {
   private async evaluateRule(
     rule: RuleConfig,
     event: TriggerEvent,
-    observation: EventObservation
+    observation: EventObservation,
+    options?: TriggerRunOptions
   ): Promise<RuleExecutionResult> {
     const startedAt = new Date().toISOString();
-    const executionKey = this.resolveExecutionKey(rule, event, observation);
+    const baseExecutionKey = this.resolveExecutionKey(rule, event, observation);
+    const executionKey = options?.ignoreGuards
+      ? `${baseExecutionKey}:override:${Date.now()}`
+      : baseExecutionKey;
     const actionCount = this.normalizeActions(rule).length;
     const decisionContext = {
       ruleId: rule.id,
       trigger: event.trigger,
       eventId: event.id,
-      executionKey
+      executionKey,
+      ignoreGuards: Boolean(options?.ignoreGuards)
     };
 
-    const cooldownKey = `rule:${rule.id}:${executionKey}`;
-    if (rule.cooldownMinutes && this.dependencies.state.isCooldownActive(cooldownKey)) {
+    const cooldownKey = `rule:${rule.id}:${baseExecutionKey}`;
+    if (!options?.ignoreGuards && rule.cooldownMinutes && this.dependencies.state.isCooldownActive(cooldownKey)) {
       return this.recordDecision(
         {
           rule,
@@ -79,15 +89,19 @@ export class RulesEngine {
 
     const conditions = this.normalizeConditions(rule);
     for (const condition of conditions) {
-      const passed = this.evaluateCondition(rule, condition, event, observation);
-      const reason = passed
-        ? `Condition ${condition.type} passed`
-        : `Condition ${condition.type} did not pass`;
+      const bypassed = Boolean(options?.ignoreGuards) && this.shouldBypassCondition(condition);
+      const passed = bypassed ? true : this.evaluateCondition(rule, condition, event, observation);
+      const reason = bypassed
+        ? `Condition ${condition.type} bypassed by manual override`
+        : passed
+          ? `Condition ${condition.type} passed`
+          : `Condition ${condition.type} did not pass`;
       this.dependencies.logger.info("Rule condition evaluated", {
         ...decisionContext,
         condition: condition.type,
         passed,
-        reason
+        reason,
+        bypassed
       });
 
       if (!passed) {
@@ -123,7 +137,7 @@ export class RulesEngine {
     }
 
     try {
-      const context = await this.buildContext(rule, event, observation, executionKey);
+      const context = await this.buildContext(rule, event, observation, executionKey, options);
       const actions = this.normalizeActions(rule);
       for (const action of actions) {
         await this.executeAction(action, context);
@@ -132,11 +146,14 @@ export class RulesEngine {
       this.dependencies.state.completeExecution(executionKey);
       this.dependencies.state.markProcessed(rule.id, event);
 
-      if (rule.cooldownMinutes) {
+      if (!options?.ignoreGuards && rule.cooldownMinutes) {
         this.dependencies.state.setCooldown(cooldownKey, rule.cooldownMinutes);
       }
 
       for (const condition of conditions) {
+        if (options?.ignoreGuards) {
+          continue;
+        }
         if (condition.type === "cooldown_elapsed" && condition.key && condition.minutes) {
           const conditionKey = renderTemplate(condition.key, this.buildTemplateContext(event, observation));
           this.dependencies.state.setCooldown(conditionKey, condition.minutes);
@@ -217,7 +234,8 @@ export class RulesEngine {
     rule: RuleConfig,
     event: TriggerEvent,
     observation: EventObservation,
-    executionKey: string
+    executionKey: string,
+    triggerRunOptions?: TriggerRunOptions
   ): Promise<ActionExecutionContext> {
     return {
       config: this.dependencies.config,
@@ -225,11 +243,16 @@ export class RulesEngine {
       rule,
       event,
       observation,
+      triggerRunOptions,
       state: this.dependencies.state,
       adapters: this.dependencies.adapters,
       logger: this.dependencies.logger,
       executionKey
     };
+  }
+
+  private shouldBypassCondition(condition: RuleCondition): boolean {
+    return condition.type === "not_processed" || condition.type === "cooldown_elapsed";
   }
 
   private buildTemplateContext(

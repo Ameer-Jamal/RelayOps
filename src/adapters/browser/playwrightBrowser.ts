@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import type { AppConfig, Logger } from "../../types";
+import { mergeTeamsProtocolHandlerPreferences } from "./teamsChromiumProfile";
 
 export class PlaywrightBrowserManager {
   private context?: BrowserContext;
@@ -20,11 +21,31 @@ export class PlaywrightBrowserManager {
     return browser.isConnected();
   }
 
+  private buildLaunchArgs(): string[] {
+    return [...this.config.browser.extraArgs];
+  }
+
   private async launchPersistentContext(): Promise<BrowserContext> {
+    mergeTeamsProtocolHandlerPreferences(this.config.browser.profileDir, this.logger);
+
     const context = await chromium.launchPersistentContext(this.config.browser.profileDir, {
       headless: this.config.browser.headless,
       channel: this.config.browser.channel,
-      viewport: { width: 1440, height: 1024 }
+      viewport: { width: 1440, height: 1024 },
+      args: this.buildLaunchArgs()
+    });
+
+    await context.addInitScript(() => {
+      const blocked = (href: string) => /^\s*msteams:/i.test(href) || /^\s*ms-teams:/i.test(href);
+      const nativeOpen = window.open;
+      window.open = function (url?: string | URL, target?: string, features?: string): Window | null {
+        const s =
+          url === undefined || url === null ? "" : typeof url === "string" ? url : (url as URL).toString();
+        if (blocked(s)) {
+          return null;
+        }
+        return nativeOpen.call(window, url as never, target, features);
+      };
     });
 
     context.on("close", () => {

@@ -24,7 +24,8 @@ const BUSY_LABELS: Record<BusyKey, string> = {
 export function ActionsPage() {
   const loadTargets = useCallback(() => apiRequest<TargetRecord[]>("/api/targets"), []);
   const { data: targets } = useApiData(loadTargets);
-  const [trigger, setTrigger] = useState<"new_pr" | "unread_message" | "manual">("manual");
+  const [trigger, setTrigger] = useState<"new_pr" | "unread_message" | "manual">("new_pr");
+  const [ignoreGuards, setIgnoreGuards] = useState(false);
   const [target, setTarget] = useState<string>("");
   const [text, setText] = useState<string>("RelayOps test message");
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -105,14 +106,37 @@ export function ActionsPage() {
               </select>
             </label>
           </div>
+          <p className="muted narrow-note">
+            `new_pr` checks your configured pull-request source. `manual` only runs rules that explicitly use
+            `trigger: manual`.
+          </p>
+          <label className="toggle">
+            <input
+              checked={ignoreGuards}
+              disabled={isBusy}
+              onChange={(event) => setIgnoreGuards(event.target.checked)}
+              type="checkbox"
+            />
+            <span>Ignore cooldown and dedupe guards for this manual run</span>
+          </label>
+          <p className="muted narrow-note">
+            Test mode only. This bypasses rule cooldowns, `not_processed`, and execution-key dedupe so you can replay
+            existing events without clearing the whole database.
+          </p>
           <button
             className="button"
             disabled={isBusy}
             onClick={() =>
               void runAction(
                 "run-trigger",
-                () => apiRequest("/api/actions/run-trigger", { method: "POST", body: JSON.stringify({ trigger }) }),
-                `Trigger ${trigger} finished.`
+                () =>
+                  apiRequest("/api/actions/run-trigger", {
+                    method: "POST",
+                    body: JSON.stringify({ trigger, ignoreGuards })
+                  }),
+                ignoreGuards
+                  ? `Trigger ${trigger} finished with guard overrides.`
+                  : `Trigger ${trigger} finished.`
               )
             }
             type="button"

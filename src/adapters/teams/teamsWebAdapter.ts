@@ -40,6 +40,8 @@ function sleep(ms: number): Promise<void> {
 }
 
 export class TeamsWebAdapter implements MessagingAdapter {
+  private lastObservedSessionState: SessionState = "unknown";
+
   constructor(
     private readonly browser: PlaywrightBrowserManager,
     private readonly config: AppConfig,
@@ -52,6 +54,7 @@ export class TeamsWebAdapter implements MessagingAdapter {
     await this.safeGoto(page, this.config.teams.baseUrl, { label: `teams-home:${reason}` });
 
     const observation = await this.waitForKnownSessionState(page, reason);
+    this.lastObservedSessionState = observation.state;
     if (observation.state === "ready") {
       this.logger.info("Teams session validated", { reason });
       return;
@@ -88,7 +91,12 @@ export class TeamsWebAdapter implements MessagingAdapter {
     const page = await this.browser.getPage();
     await this.safeGoto(page, this.config.teams.baseUrl, { label: "teams-session-inspect" });
     const observation = await this.waitForKnownSessionState(page, "inspect");
+    this.lastObservedSessionState = observation.state;
     return observation.state;
+  }
+
+  getCachedSessionState(): SessionState {
+    return this.lastObservedSessionState;
   }
 
   async openSession(): Promise<void> {
@@ -201,6 +209,7 @@ export class TeamsWebAdapter implements MessagingAdapter {
     const deadline = Date.now() + this.config.teams.loginTimeoutMs;
     while (Date.now() < deadline) {
       const observation = await this.observeSessionState(page);
+      this.lastObservedSessionState = observation.state;
       if (observation.state === "ready") {
         this.logger.info("Teams session became ready", { reason });
         return;
@@ -223,6 +232,7 @@ export class TeamsWebAdapter implements MessagingAdapter {
     while (Date.now() < deadline && observation.state === "unknown") {
       await sleep(750);
       observation = await this.observeSessionState(page);
+      this.lastObservedSessionState = observation.state;
     }
 
     if (observation.state === "unknown") {
@@ -283,7 +293,7 @@ export class TeamsWebAdapter implements MessagingAdapter {
     await this.ensureTargetWorkspace(page, target);
 
     if (target.label) {
-      if (await this.waitForTargetView(page, target, `teams-target-skip-if-ready:${target.label}`)) {
+      if (await this.isSpecificTargetActive(page, target, `teams-target-skip-if-ready:${target.label}`)) {
         this.logger.info("Teams target already active", {
           target: target.label,
           currentUrl: page.url()
@@ -293,23 +303,33 @@ export class TeamsWebAdapter implements MessagingAdapter {
 
       await this.ensureTeamsWebAppRoot(page);
       await this.dismissTransientTeamsUi(page);
-      await this.navigateToLabel(page, target.label);
+      try {
+        await this.navigateToLabel(page, target.label);
 
-      const targetReady = await this.waitForTargetView(page, target, `teams-target-label:${target.label}`);
-      if (targetReady) {
-        this.logger.info("Teams target resolved via label", {
-          target: target.label,
-          currentUrl: page.url()
+        const targetReady = await this.waitForTargetView(page, target, `teams-target-label:${target.label}`);
+        if (targetReady) {
+          this.logger.info("Teams target resolved via label", {
+            target: target.label,
+            currentUrl: page.url()
+          });
+          return;
+        }
+
+        this.logger.warn("Teams target label did not resolve to a ready view", {
+          targetLabel: target.label,
+          targetUrl: target.url,
+          currentUrl: page.url(),
+          currentTitle: await page.title().catch(() => "")
         });
-        return;
+      } catch (error) {
+        this.logger.warn("Teams target label navigation failed; attempting URL fallback", {
+          targetLabel: target.label,
+          targetUrl: target.url,
+          currentUrl: page.url(),
+          currentTitle: await page.title().catch(() => ""),
+          error: error instanceof Error ? error.message : String(error)
+        });
       }
-
-      this.logger.warn("Teams target label did not resolve to a ready view", {
-        targetLabel: target.label,
-        targetUrl: target.url,
-        currentUrl: page.url(),
-        currentTitle: await page.title().catch(() => "")
-      });
     }
 
     if (target.url) {
@@ -495,29 +515,20 @@ export class TeamsWebAdapter implements MessagingAdapter {
     const deadline = Date.now() + Math.min(this.config.teams.navigationTimeoutMs, 12000);
 
     while (Date.now() < deadline) {
-      const readyCandidates: LocatorCandidate[] = [
-        ...this.selectorCandidates(page, teamsSelectors.composer),
-        ...this.selectorCandidates(page, teamsSelectors.messageItems)
-      ];
-
       if (target.label) {
-        const partialLabel = new RegExp(escapeRegex(target.label), "i");
-        readyCandidates.push(
-          {
-            description: "target heading by accessible name",
-            resolve: () => page.getByRole("heading", { name: partialLabel }).first()
-          },
-          {
-            description: "target visible text",
-            resolve: () => page.getByText(partialLabel).first()
-          }
-        );
+        if (await this.isSpecificTargetActive(page, target, label)) {
+          return true;
+        }
       } else {
-        readyCandidates.push(...this.selectorCandidates(page, teamsSelectors.targetHeaders));
-      }
+        const readyCandidates: LocatorCandidate[] = [
+          ...this.selectorCandidates(page, teamsSelectors.composer),
+          ...this.selectorCandidates(page, teamsSelectors.messageItems),
+          ...this.selectorCandidates(page, teamsSelectors.targetHeaders)
+        ];
 
-      if (await this.anyVisible(readyCandidates, { label: `${label}-ready` })) {
-        return true;
+        if (await this.anyVisible(readyCandidates, { label: `${label}-ready` })) {
+          return true;
+        }
       }
 
       await sleep(750);
@@ -533,11 +544,125 @@ export class TeamsWebAdapter implements MessagingAdapter {
     return false;
   }
 
+  private async isSpecificTargetActive(page: Page, target: MessageTarget, label: string): Promise<boolean> {
+    const identityVisible = await this.anyVisible(this.buildTargetIdentityCandidates(page, target), {
+      label: `${label}-identity`
+    });
+    if (!identityVisible) {
+      return false;
+    }
+
+    const activityVisible = await this.anyVisible(
+      [
+        ...this.selectorCandidates(page, teamsSelectors.composer),
+        ...this.selectorCandidates(page, teamsSelectors.messageItems)
+      ],
+      { label: `${label}-activity` }
+    );
+
+    if (!activityVisible) {
+      this.logger.debug("Teams target identity matched but activity surface was not ready", {
+        label,
+        targetLabel: target.label,
+        currentUrl: page.url()
+      });
+      return false;
+    }
+
+    return true;
+  }
+
+  private buildTargetIdentityCandidates(page: Page, target: MessageTarget): LocatorCandidate[] {
+    if (!target.label) {
+      return this.selectorCandidates(page, teamsSelectors.targetHeaders);
+    }
+
+    const exactLabel = new RegExp(`^${escapeRegex(target.label)}$`, "i");
+    const partialLabel = new RegExp(escapeRegex(target.label), "i");
+
+    return [
+      {
+        description: "target heading by exact accessible name",
+        resolve: () => page.getByRole("heading", { name: exactLabel }).first()
+      },
+      {
+        description: "target heading by partial accessible name",
+        resolve: () => page.getByRole("heading", { name: partialLabel }).first()
+      },
+      {
+        description: "header region exact text",
+        resolve: () =>
+          page
+            .locator('header, [role="banner"], [role="main"]')
+            .locator(':scope *')
+            .filter({ hasText: exactLabel })
+            .first()
+      },
+      {
+        description: "main region exact text",
+        resolve: () =>
+          page
+            .locator('[role="main"], main')
+            .locator(':scope *')
+            .filter({ hasText: exactLabel })
+            .first()
+      }
+    ];
+  }
+
   private selectorCandidates(page: Page, selectors: readonly SelectorCandidate[]): LocatorCandidate[] {
     return selectors.map((candidate) => ({
       description: candidate.description,
       resolve: () => page.locator(candidate.selector).first()
     }));
+  }
+
+  private async isTeamsOopsErrorPage(page: Page): Promise<boolean> {
+    const url = page.url().toLowerCase();
+    if (url.includes("/error/eoa")) {
+      return true;
+    }
+    const title = (await page.title().catch(() => "")).trim();
+    return /microsoft teams\s*-\s*error/i.test(title);
+  }
+
+  /**
+   * Teams sometimes shows /error/eoa with "Use Teams on the web" (target=_blank). Same-tab goto avoids a new page.
+   */
+  private async recoverFromTeamsOopsPage(page: Page, label: string): Promise<boolean> {
+    if (!(await this.isTeamsOopsErrorPage(page))) {
+      return false;
+    }
+
+    const timeout = this.config.teams.navigationTimeoutMs;
+    let webShellUrl = this.teamsWebAppRootUrl();
+
+    const errorLinkCandidates = this.selectorCandidates(page, teamsSelectors.teamsErrorUseWeb);
+    for (const candidate of errorLinkCandidates) {
+      const locator = candidate.resolve();
+      if (!(await locator.isVisible().catch(() => false))) {
+        continue;
+      }
+      const href = await locator.getAttribute("href").catch(() => null);
+      if (href?.startsWith("http")) {
+        webShellUrl = href;
+        break;
+      }
+    }
+
+    this.logger.info("Teams error/oops page detected; opening web shell (same tab)", {
+      label,
+      currentUrl: page.url().slice(0, 220),
+      webShellUrl: webShellUrl.slice(0, 120)
+    });
+
+    await page.goto(webShellUrl, {
+      waitUntil: "domcontentloaded",
+      timeout
+    });
+    await this.ensureWebAppInsteadOfLauncher(page, `${label}-oops-recovery`);
+    await sleep(400);
+    return true;
   }
 
   private async safeGoto(
@@ -558,6 +683,18 @@ export class TeamsWebAdapter implements MessagingAdapter {
           timeout: this.config.teams.navigationTimeoutMs
         });
         await this.ensureWebAppInsteadOfLauncher(page, options.label);
+        if (await this.recoverFromTeamsOopsPage(page, options.label)) {
+          this.logger.info("Retrying Teams navigation after oops-page recovery", {
+            label: options.label,
+            url: normalizedUrl.slice(0, 220)
+          });
+          await page.goto(normalizedUrl, {
+            waitUntil: "domcontentloaded",
+            timeout: this.config.teams.navigationTimeoutMs
+          });
+          await this.ensureWebAppInsteadOfLauncher(page, `${options.label}-post-oops`);
+          await this.recoverFromTeamsOopsPage(page, `${options.label}-post-oops-second`);
+        }
       },
       options.retries ?? this.config.teams.actionRetries,
       async (attempt, error) => {
@@ -573,36 +710,65 @@ export class TeamsWebAdapter implements MessagingAdapter {
   }
 
   private async ensureWebAppInsteadOfLauncher(page: Page, label: string): Promise<void> {
-    const currentUrl = page.url();
+    const timeout = this.config.teams.navigationTimeoutMs;
     const launcherButtonCandidates = this.selectorCandidates(page, teamsSelectors.launcherUseWebApp);
-    const launcherVisible = await this.anyVisible(launcherButtonCandidates, {
-      label: `${label}-launcher-use-web-app`
-    });
 
-    if (!launcherVisible && !this.isLauncherUrl(currentUrl)) {
-      return;
-    }
+    for (let hop = 0; hop < 6; hop += 1) {
+      const currentUrl = page.url();
 
-    this.logger.info("Teams launcher flow detected; keeping automation in the web app", {
-      label,
-      currentUrl
-    });
+      if (this.isLauncherUrl(currentUrl)) {
+        const webUrl = this.normalizeTeamsUrl(currentUrl);
+        if (webUrl !== currentUrl) {
+          this.logger.info("Teams launcher page detected; navigating to web URL before desktop protocol runs", {
+            label,
+            hop,
+            webUrl: webUrl.slice(0, 220)
+          });
+          await page.goto(webUrl, {
+            waitUntil: "domcontentloaded",
+            timeout
+          });
+          await sleep(400);
+          continue;
+        }
+      }
 
-    if (launcherVisible) {
-      await this.safeClick(launcherButtonCandidates, {
+      const launcherVisible = await this.anyVisible(launcherButtonCandidates, {
         label: `${label}-launcher-use-web-app`
       });
-      await page.waitForLoadState("domcontentloaded", {
-        timeout: this.config.teams.navigationTimeoutMs
-      });
-      return;
+
+      if (launcherVisible) {
+        this.logger.info("Teams launcher UI visible; choosing Use the web app instead", {
+          label,
+          hop,
+          currentUrl: currentUrl.slice(0, 220)
+        });
+        await this.safeClick(launcherButtonCandidates, {
+          label: `${label}-launcher-use-web-app`
+        });
+        await page.waitForLoadState("domcontentloaded", { timeout });
+        await sleep(300);
+        continue;
+      }
+
+      if (!this.isLauncherUrl(page.url())) {
+        return;
+      }
+
+      const fallback = this.normalizeTeamsUrl(page.url());
+      if (fallback !== page.url()) {
+        await page.goto(fallback, { waitUntil: "domcontentloaded", timeout });
+        await sleep(400);
+        continue;
+      }
+
+      break;
     }
 
-    const normalizedCurrentUrl = this.normalizeTeamsUrl(currentUrl);
-    if (normalizedCurrentUrl !== currentUrl) {
-      await page.goto(normalizedCurrentUrl, {
-        waitUntil: "domcontentloaded",
-        timeout: this.config.teams.navigationTimeoutMs
+    if (this.isLauncherUrl(page.url())) {
+      this.logger.warn("Still on Teams launcher after recovery attempts; dismiss any macOS Open Teams dialog manually", {
+        label,
+        currentUrl: page.url().slice(0, 220)
       });
     }
   }

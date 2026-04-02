@@ -6,6 +6,7 @@ web/dist/
 .env.local
 rules.local.yaml
 
+.cursor/
 .relayops/
 playwright-report/
 test-results/

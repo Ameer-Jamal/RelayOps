@@ -23,6 +23,8 @@ export interface AppConfig {
     screenshotsDir: string;
     captureScreenshots: boolean;
     channel?: string;
+    /** Extra Chromium flags (e.g. experimental mitigations). Split on whitespace. */
+    extraArgs: string[];
   };
   teams: {
     baseUrl: string;
@@ -39,10 +41,22 @@ export interface AppConfig {
     url?: string;
     limit: number;
   };
+  /** When workspace + credentials are set, `new_pr` uses Bitbucket Cloud API instead of the file/URL feed. */
+  bitbucket?: BitbucketPrSourceConfig;
   alerts: {
     enabled: boolean;
     soundEnabled: boolean;
   };
+}
+
+export interface BitbucketPrSourceConfig {
+  workspace: string;
+  /** Repository slugs to scan (e.g. `workspace`). If empty, all repos in the workspace are listed via API. */
+  repositorySlugs: string[];
+  username: string;
+  appPassword: string;
+  /** Optional Bitbucket author UUID / account id filter (matches the `author` query on the PR list in the web UI). */
+  authorUuid?: string;
 }
 
 export interface MessageTarget {
@@ -114,6 +128,10 @@ export interface PullRequestAdapter {
 }
 
 export type RuleTrigger = "new_pr" | "unread_message" | "manual";
+
+export interface TriggerRunOptions {
+  ignoreGuards?: boolean;
+}
 
 export interface RuleCondition {
   type: "always" | "not_processed" | "older_than_minutes" | "cooldown_elapsed";
@@ -189,6 +207,7 @@ export interface ActionExecutionContext {
   rules: RulesFileConfig;
   rule: RuleConfig;
   executionKey: string;
+  triggerRunOptions?: TriggerRunOptions;
   event: TriggerEvent;
   observation: EventObservation;
   state: StateStore;

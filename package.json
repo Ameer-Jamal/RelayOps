@@ -15,7 +15,7 @@
     "build:api": "tsc -p tsconfig.json",
     "dev": "tsx src/main.ts",
     "dev:api": "tsx src/main.ts",
-    "dev:all": "concurrently \"npm run dev:api\" \"npm run ui:dev\"",
+    "dev:all": "concurrently -k \"npm run dev:api\" \"wait-on tcp:127.0.0.1:4317 && npm run ui:dev\"",
     "start": "node dist/main.js",
     "cli": "tsx src/cli/index.ts",
     "typecheck": "npm run typecheck:api && npm run typecheck --workspace web",
@@ -40,6 +40,7 @@
     "@types/node-notifier": "^8.0.5",
     "concurrently": "^9.1.2",
     "tsx": "^4.20.3",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "wait-on": "^8.0.5"
   }
 }

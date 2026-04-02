@@ -55,6 +55,12 @@ export const teamsSelectors = {
     { description: "join on web by data-tid", selector: '[data-tid="joinOnWeb"]' },
     { description: "use the web app button text", selector: 'button:has-text("Use the web app instead")' }
   ],
+  /** /error/eoa "oops" interstitial — prefer same-tab goto(href) over click (avoids target=_blank). */
+  teamsErrorUseWeb: [
+    { description: "open teams on web primary link", selector: "#open-teams-on-web" },
+    { description: "oops fluent primary to v2", selector: "a.oops-button[href*='teams.microsoft.com']" },
+    { description: "use teams on the web text", selector: 'a:has-text("Use Teams on the web")' }
+  ],
   targetHeaders: [
     { description: "main heading", selector: 'main [role="heading"]' },
     { description: "page heading", selector: '[role="main"] [role="heading"]' },

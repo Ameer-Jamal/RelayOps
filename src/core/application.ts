@@ -1,4 +1,4 @@
-import { FilePullRequestAdapter } from "../adapters/git/filePullRequestAdapter";
+import { createPullRequestAdapter } from "../adapters/git/pullRequestAdapterFactory";
 import path from "node:path";
 import { LocalAlertAdapter } from "../adapters/notifications/localAlertAdapter";
 import { TeamsWebAdapter } from "../adapters/teams/teamsWebAdapter";
@@ -10,10 +10,12 @@ import type {
   AppConfig,
   Logger,
   MessageRecord,
+  PullRequestAdapter,
   RuleConfig,
   RuleTrigger,
   RulesFileConfig,
-  StateSnapshot
+  StateSnapshot,
+  TriggerRunOptions
 } from "../types";
 import type {
   AdminAlertRecord,
@@ -43,7 +45,7 @@ export class RelayOpsApplication {
   private readonly stateStore: SqliteStateStore;
   private readonly teamsAdapter: TeamsWebAdapter;
   private readonly alertsAdapter: LocalAlertAdapter;
-  private readonly prAdapter: FilePullRequestAdapter;
+  private readonly prAdapter: PullRequestAdapter;
   private readonly summaryAdapter: PlaceholderSummaryAdapter;
   private readonly rulesEngine: RulesEngine;
   private readonly orchestrator: RelayOpsOrchestrator;
@@ -62,11 +64,7 @@ export class RelayOpsApplication {
     this.browser = new PlaywrightBrowserManager(this.config, this.logger);
     this.teamsAdapter = new TeamsWebAdapter(this.browser, this.config, this.logger);
     this.alertsAdapter = new LocalAlertAdapter(this.logger, this.config);
-    this.prAdapter = new FilePullRequestAdapter(
-      this.config.prSource.path,
-      this.config.prSource.url,
-      this.logger
-    );
+    this.prAdapter = createPullRequestAdapter(this.config, this.logger);
     this.summaryAdapter = new PlaceholderSummaryAdapter();
     this.rulesEngine = new RulesEngine({
       config: this.config,
@@ -138,8 +136,8 @@ export class RelayOpsApplication {
     this.stateStore.close();
   }
 
-  async runTrigger(trigger: RuleTrigger): Promise<TriggerRunSummary> {
-    return this.orchestrator.runTrigger(trigger);
+  async runTrigger(trigger: RuleTrigger, options?: TriggerRunOptions): Promise<TriggerRunSummary> {
+    return this.orchestrator.runTrigger(trigger, options);
   }
 
   async clearAlerts(): Promise<number> {
@@ -175,6 +173,11 @@ export class RelayOpsApplication {
       waitForLoginOnStartup: this.config.teams.waitForLoginOnStartup,
       alertsEnabled: this.config.alerts.enabled,
       alertSoundEnabled: this.config.alerts.soundEnabled,
+      bitbucketWorkspace: this.config.bitbucket?.workspace ?? "",
+      bitbucketUsername: this.config.bitbucket?.username ?? "",
+      bitbucketRepositories: this.config.bitbucket?.repositorySlugs.join(", ") ?? "",
+      bitbucketAuthorUuid: this.config.bitbucket?.authorUuid ?? "",
+      bitbucketAppPasswordSet: Boolean(this.config.bitbucket?.appPassword),
       logLevel: this.config.logLevel
     });
   }
@@ -193,6 +196,19 @@ export class RelayOpsApplication {
     this.config.teams.waitForLoginOnStartup = input.waitForLoginOnStartup;
     this.config.alerts.enabled = input.alertsEnabled;
     this.config.alerts.soundEnabled = input.alertSoundEnabled;
+    this.config.bitbucket =
+      input.bitbucketWorkspace.trim() && input.bitbucketUsername.trim()
+        ? {
+            workspace: input.bitbucketWorkspace.trim(),
+            username: input.bitbucketUsername.trim(),
+            appPassword: input.bitbucketAppPassword?.trim() || this.config.bitbucket?.appPassword || "",
+            repositorySlugs: input.bitbucketRepositories
+              .split(",")
+              .map((value) => value.trim())
+              .filter(Boolean),
+            authorUuid: input.bitbucketAuthorUuid.trim() || undefined
+          }
+        : undefined;
     this.config.logLevel = input.logLevel;
 
     const persistedRules = this.configStore.loadRulesFile(this.config.rulesFile);
@@ -281,7 +297,7 @@ export class RelayOpsApplication {
   async getDashboardStatus(): Promise<DashboardStatus> {
     const alerts = this.getAlerts(200);
     const ruleExecutions = this.getRuleExecutions(200);
-    const teamsSessionStatus = await this.inspectTeamsSession();
+    const teamsSessionStatus = this.inspectTeamsSession();
 
     return {
       relayOpsRunning: true,
@@ -370,6 +386,21 @@ export class RelayOpsApplication {
       issues.push({ field: "databasePath", message: "Database path is required." });
     }
 
+    const bitbucketWorkspace = this.config.bitbucket?.workspace?.trim() ?? "";
+    const bitbucketUsername = this.config.bitbucket?.username?.trim() ?? "";
+    const bitbucketPassword = this.config.bitbucket?.appPassword?.trim() ?? "";
+    if (bitbucketWorkspace || bitbucketUsername || bitbucketPassword) {
+      if (!bitbucketWorkspace) {
+        issues.push({ field: "bitbucketWorkspace", message: "Bitbucket workspace is required when Bitbucket sync is enabled." });
+      }
+      if (!bitbucketUsername) {
+        issues.push({ field: "bitbucketUsername", message: "Bitbucket username is required when Bitbucket sync is enabled." });
+      }
+      if (!bitbucketPassword) {
+        issues.push({ field: "bitbucketAppPassword", message: "Bitbucket app password is required when Bitbucket sync is enabled." });
+      }
+    }
+
     return {
       valid: issues.length === 0,
       issues
@@ -397,15 +428,8 @@ export class RelayOpsApplication {
     }));
   }
 
-  private async inspectTeamsSession(): Promise<DashboardStatus["teams"]["sessionStatus"]> {
-    try {
-      return await this.teamsAdapter.inspectSession();
-    } catch (error) {
-      this.logger.warn("Failed to inspect Teams session", {
-        error: error instanceof Error ? error.message : String(error)
-      });
-      return "unknown";
-    }
+  private inspectTeamsSession(): DashboardStatus["teams"]["sessionStatus"] {
+    return this.teamsAdapter.getCachedSessionState();
   }
 
   private buildLastRuns(ruleExecutions: AdminRuleExecutionRecord[]): DashboardStatus["lastRuns"] {

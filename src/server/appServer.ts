@@ -179,7 +179,12 @@ export class RelayOpsServer {
     });
 
     server.post("/api/actions/run-trigger", asyncHandler(async (request, response) => {
-      sendSuccess(response, await this.app.runTrigger(request.body.trigger));
+      sendSuccess(
+        response,
+        await this.app.runTrigger(request.body.trigger, {
+          ignoreGuards: Boolean(request.body?.ignoreGuards)
+        })
+      );
     }));
 
     server.post("/api/actions/teams/open", asyncHandler(async (_request, response) => {

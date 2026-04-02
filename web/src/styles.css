@@ -296,6 +296,21 @@ textarea {
   margin-top: 16px;
 }
 
+.toggle-inline {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  grid-column: 1 / -1;
+  font-size: 0.9rem;
+  color: #526076;
+  line-height: 1.4;
+}
+
+.toggle-inline input {
+  width: auto;
+  margin-top: 3px;
+}
+
 .toggle {
   display: flex;
   align-items: center;

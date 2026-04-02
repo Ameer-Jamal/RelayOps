@@ -25,10 +25,13 @@ async function run(): Promise<void> {
     .command("run-trigger")
     .description("Run a trigger once")
     .argument("<trigger>", "new_pr | unread_message | manual")
-    .action(async (trigger: RuleTrigger) => {
+    .option("--ignore-guards", "ignore rule cooldowns, not_processed checks, and execution-key dedupe")
+    .action(async (trigger: RuleTrigger, options: { ignoreGuards?: boolean }) => {
       const app = createRelayOpsApplication();
       try {
-        const result = await app.runTrigger(trigger);
+        const result = await app.runTrigger(trigger, {
+          ignoreGuards: Boolean(options.ignoreGuards)
+        });
         process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
       } finally {
         await app.stop();

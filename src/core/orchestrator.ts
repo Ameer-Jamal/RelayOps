@@ -4,6 +4,7 @@ import type {
   MessagingAdapter,
   PullRequestAdapter,
   RuleTrigger,
+  TriggerRunOptions,
   TriggerEvent,
   UnreadMessageRecord
 } from "../types";
@@ -28,14 +29,14 @@ interface OrchestratorDependencies {
 export class RelayOpsOrchestrator {
   constructor(private readonly dependencies: OrchestratorDependencies) {}
 
-  async runTrigger(trigger: RuleTrigger): Promise<TriggerRunSummary> {
+  async runTrigger(trigger: RuleTrigger, options?: TriggerRunOptions): Promise<TriggerRunSummary> {
     const events = await this.collectEvents(trigger);
     let rulesExecuted = 0;
     let rulesSkipped = 0;
 
     for (const event of events) {
       const observation = this.dependencies.state.observeEvent(event);
-      const results = await this.dependencies.rulesEngine.executeForEvent(event, observation);
+      const results = await this.dependencies.rulesEngine.executeForEvent(event, observation, options);
       for (const result of results) {
         if (result.executed) {
           rulesExecuted += 1;
@@ -49,7 +50,8 @@ export class RelayOpsOrchestrator {
       trigger,
       eventsSeen: events.length,
       rulesExecuted,
-      rulesSkipped
+      rulesSkipped,
+      ignoreGuards: Boolean(options?.ignoreGuards)
     });
 
     return {

@@ -37,6 +37,11 @@ export interface SetupConfigView {
   waitForLoginOnStartup: boolean;
   alertsEnabled: boolean;
   alertSoundEnabled: boolean;
+  bitbucketWorkspace: string;
+  bitbucketUsername: string;
+  bitbucketRepositories: string;
+  bitbucketAuthorUuid: string;
+  bitbucketAppPasswordSet: boolean;
   logLevel: AdminLogLevel;
 }
 
@@ -53,6 +58,11 @@ export interface SetupConfigUpdateInput {
   waitForLoginOnStartup: boolean;
   alertsEnabled: boolean;
   alertSoundEnabled: boolean;
+  bitbucketWorkspace: string;
+  bitbucketUsername: string;
+  bitbucketRepositories: string;
+  bitbucketAuthorUuid: string;
+  bitbucketAppPassword?: string;
   logLevel: AdminLogLevel;
 }
 
