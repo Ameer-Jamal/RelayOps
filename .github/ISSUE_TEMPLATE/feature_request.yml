@@ -1,0 +1,13 @@
+name: Feature request
+description: Suggest a RelayOps improvement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What workflow is difficult today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would make it easier?

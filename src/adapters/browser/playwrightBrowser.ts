@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import type { AppConfig, Logger } from "../../types";
-import { mergeTeamsProtocolHandlerPreferences } from "./teamsChromiumProfile";
+import { cleanStaleChromiumLocks, mergeTeamsProtocolHandlerPreferences } from "./teamsChromiumProfile";
 
 export class PlaywrightBrowserManager {
   private context?: BrowserContext;
@@ -26,14 +26,36 @@ export class PlaywrightBrowserManager {
   }
 
   private async launchPersistentContext(): Promise<BrowserContext> {
+    cleanStaleChromiumLocks(this.config.browser.profileDir, this.logger);
     mergeTeamsProtocolHandlerPreferences(this.config.browser.profileDir, this.logger);
 
-    const context = await chromium.launchPersistentContext(this.config.browser.profileDir, {
-      headless: this.config.browser.headless,
-      channel: this.config.browser.channel,
-      viewport: { width: 1440, height: 1024 },
-      args: this.buildLaunchArgs()
-    });
+    let context: BrowserContext;
+    try {
+      context = await chromium.launchPersistentContext(this.config.browser.profileDir, {
+        headless: this.config.browser.headless,
+        channel: this.config.browser.channel,
+        viewport: { width: 1440, height: 1024 },
+        args: this.buildLaunchArgs()
+      });
+    } catch (launchError) {
+      const message = launchError instanceof Error ? launchError.message : String(launchError);
+      if (message.includes("ProcessSingleton")) {
+        this.logger.warn("ProcessSingleton lock conflict detected; clearing stale locks and retrying browser launch", {
+          message
+        });
+        cleanStaleChromiumLocks(this.config.browser.profileDir, this.logger);
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        context = await chromium.launchPersistentContext(this.config.browser.profileDir, {
+          headless: this.config.browser.headless,
+          channel: this.config.browser.channel,
+          viewport: { width: 1440, height: 1024 },
+          args: this.buildLaunchArgs()
+        });
+      } else {
+        throw launchError;
+      }
+    }
+
 
     await context.addInitScript(() => {
       const blocked = (href: string) => /^\s*msteams:/i.test(href) || /^\s*ms-teams:/i.test(href);

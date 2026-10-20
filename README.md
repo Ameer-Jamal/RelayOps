@@ -1,168 +1,121 @@
 # RelayOps
 
-RelayOps is a public-first, local-first automation platform for browser-driven workflows. It ships with a Playwright-based Microsoft Teams Web adapter, a config-driven rules engine, SQLite-backed state, a CLI, a local API, and a lightweight local web admin GUI built with React and Vite.
+**Give AI workflows a Teams destination.**
 
-## Principles
+[![CI](https://github.com/Ameer-Jamal/RelayOps/actions/workflows/ci.yml/badge.svg)](https://github.com/Ameer-Jamal/RelayOps/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Ameer-Jamal/RelayOps)](https://github.com/Ameer-Jamal/RelayOps/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Node 22](https://img.shields.io/badge/Node.js-22.22.2%2B-43853d.svg)](package.json)
 
-- No credentials, tenants, URLs, names, or session data are hardcoded.
-- Framework code stays generic; user behavior lives in config and environment variables.
-- Runtime data is local-only and gitignored.
-- Adapters are pluggable and implementation-agnostic.
-- Teams browser actions use resilient selector chains, retries, and failure screenshots.
-- Rule execution is guarded by execution keys, cooldowns, and persisted decision history.
+RelayOps is a local Teams automation app and MCP server. Let an AI assistant prepare a summary, review a pull request, or run a scheduled check, then deliver the result to the Teams destination you authorize. Discover existing chats and channels automatically; keep named aliases only where they help recurring rules.
 
-## Quick Start
+[Get started](#get-started) · [Connect an AI](#connect-an-ai-client) · [Releases](https://github.com/Ameer-Jamal/RelayOps/releases) · [Architecture](docs/architecture.md) · [Contribute](CONTRIBUTING.md)
 
-1. Install dependencies:
+![Searchable Teams destination picker using synthetic demo data](docs/assets/destination-picker.png)
 
-```bash
-npm install
+## What it does
+
+- **Find destinations:** searchable dropdown with people/chat/channel filters, 30-result pages, keyboard selection, and server-side filtering. Thousands of destinations do not become thousands of DOM rows.
+- **Work with AI:** eight MCP tools for discovery, sending, reading, authentication, status, and manual rule triggers.
+- **Remember metadata locally:** account/profile-specific directory cache with a 15-minute refresh interval on demand. Message history is not stored in the directory cache.
+- **Automate rules:** pull-request and unread-activity triggers, local alerts, templates, cooldowns, deduplication, and SQLite execution history.
+- **See what happened:** local admin UI with health, configuration, rules, logs, and execution results.
+
+For example, ask a connected assistant: “Review this PR, then send the summary to my Teams self-chat.” To deliver to another recipient, explicitly identify the recipient and purpose. Search first and resolve duplicate names before sending.
+
+## Get started
+
+Use **Node 22.22.2 or newer in the Node 22 release line**, Git, and a Teams work/school account. macOS and Linux core checks run in CI; Windows has not been validated for this release.
+
+### From source
+
+```sh
+git clone https://github.com/Ameer-Jamal/RelayOps.git
+cd RelayOps
+npm ci
 npx playwright install chromium
+npm run build
+npm start
 ```
 
-2. Create local config files:
+Open **[localhost:4317](http://127.0.0.1:4317)**. Initial setup works without credentials. Copy `.env.example` to `.env` and `rules.example.yaml` to `rules.local.yaml` when you want local configuration files. Polling and startup Teams validation are disabled by default.
 
-```bash
-cp .env.example .env
-cp rules.example.yaml rules.local.yaml
+In **Manual Actions**, open/validate the Teams session and sign in through the dedicated browser window. Then open **Targets** to discover your accessible destinations. Use the dropdown to search by name, email, team, or conversation ID. Discovery sends no messages. The same picker is available when composing a manual test post.
+
+### From a release
+
+Download `RelayOps-vX.Y.Z.tar.gz` and `SHA256SUMS.txt` from [GitHub Releases](https://github.com/Ameer-Jamal/RelayOps/releases). Verify the checksum, extract the archive, and run inside its folder:
+
+```sh
+npm ci --omit=dev
+npx playwright install chromium
+npm start
 ```
 
-3. Update `rules.local.yaml` and `.env` with your own targets and local paths.
+The runtime archive already includes the compiled server and UI. It contains no installed dependencies, credentials, browser profile, or personal state. Native SQLite dependencies install for your own machine. GitHub also provides source archives for development.
 
-4. Start RelayOps:
+## Connect an AI client
 
-```bash
-npm run dev
+Build first when using a source checkout. Configure a local **stdio** MCP server using absolute paths:
+
+```json
+{
+  "mcpServers": {
+    "relayops": {
+      "command": "/absolute/path/to/node",
+      "args": ["/absolute/path/to/RelayOps/dist/mcp/index.js"]
+    }
+  }
+}
 ```
 
-The service starts a local Express API at `http://127.0.0.1:4317`.
-On first run, scheduler and startup Teams validation are disabled by default so you can finish setup in the GUI before enabling automation.
+For Codex CLI configuration:
 
-5. Start the admin GUI in development mode:
-
-```bash
-npm run ui:dev
+```sh
+codex mcp add relayops -- /absolute/path/to/node /absolute/path/to/RelayOps/dist/mcp/index.js
 ```
 
-The Vite frontend runs at `http://127.0.0.1:5173` and talks only to the local RelayOps API.
+The server locates configuration from the RelayOps folder regardless of the client's working directory. Allow a tool timeout of **360 seconds** for sign-in/discovery. Direct Node execution keeps stdout clean for MCP; `npm run --silent mcp` also runs the compiled server. Use `npm run mcp:dev` during development. Reconnect the client after upgrading the server.
 
-6. Or run both together:
+| Tool | Purpose |
+| --- | --- |
+| `teams_search_destinations` | Search/filter/page the account-specific directory; optionally refresh it |
+| `teams_list_conversations` | List discovered destinations |
+| `teams_list_targets` | List optional configured aliases |
+| `teams_send_message` | Send plain text to an exact destination or alias |
+| `teams_read_messages` | Read recent messages from a destination |
+| `relayops_authenticate_teams` | Open/validate the browser session and capture authentication |
+| `relayops_get_status` | Inspect runtime and authentication state |
+| `relayops_run_trigger` | Execute a rule trigger with safeguards enabled by default |
 
-```bash
-npm run dev:all
+`teams_search_destinations` accepts `query`, `kind` (`all`, `person`, `chat`, `channel`), `limit` (1–100), `offset`, and `refresh`. Use its returned `nextOffset` to continue. Resolve a name to its conversation ID before delivery if there are duplicates. Manual aliases override discovered names.
+
+## Scheduling and rules
+
+MCP provides tools; your AI client's scheduler decides when to use them. For an AI-generated daily report, configure a local scheduled task in the client that prepares the report, searches the intended recipient, and calls RelayOps to send it. The computer/client must be available and Teams authenticated. RelayOps's MCP process does not start polling rules or the admin server by itself.
+
+RelayOps also has its own optional polling rules for `new_pr` and `unread_message`. Configure them in local rules and enable the scheduler deliberately. Cooldowns, execution keys, and SQLite history guard repeated actions. Manual trigger calls preserve guards unless `ignoreGuards: true` is explicitly requested.
+
+Bitbucket integration uses your **Atlassian account email and a Bitbucket API token** with repository/pull-request read access. Set `RELAYOPS_BITBUCKET_USERNAME` and `RELAYOPS_BITBUCKET_APP_PASSWORD` respectively; those legacy environment names remain compatible. App passwords are no longer supported. A rejected credential is surfaced as an error, not “no PRs.” You can also use a local JSON PR feed; see [the configuration example](.env.example).
+
+## Reliability and limits
+
+Teams Web's newer bearer-authenticated Chat Service proxy and legacy regional Skype-token endpoints are supported. Read/discovery access has been verified in a work account, and a self-chat message was sent and read back. This release has not been live-tested by sending to other people or channels.
+
+These are **internal Teams Web APIs** and can change. RelayOps does not register a Microsoft Graph application or bypass tenant policy. Discovery covers the signed-in user's conversation index, not every person/channel in the organization. A separate supported Graph integration would require its own app registration and consent.
+
+Tokens expire and may require sign-in. Discovery distinguishes 401 authentication rejection, 403 access denial, and 429 throttling, paces reads, and respects bounded retry delays. A failed refresh retains the same account's cached data. Ambiguous names require an ID; bot chats and departed participants are not inferred to be self-chat. Uncertain API sends are not automatically resent.
+
+Browser fallback still depends on Teams selectors. A live browser profile cannot be opened by two processes simultaneously. Keep the local admin server bound to `127.0.0.1`; see [Security](SECURITY.md) before connecting an AI client or exposing any service.
+
+## Development and verification
+
+```sh
+npm run dev:all     # API + Vite UI
+npm run verify     # typechecks, unit/MCP tests, build, browser tests
+npm run release:package
 ```
 
-This starts the API first and waits until `127.0.0.1:4317` is accepting connections before launching Vite, so the GUI’s first `/api` calls are not refused during startup.
+Browser tests use isolated temporary state and **2,500 synthetic destinations**, never your Teams account. The release workflow reruns CI before publishing a compiled runtime archive and SHA-256 checksums. See [Contributing](CONTRIBUTING.md), [Changelog](CHANGELOG.md), and [Security](SECURITY.md).
 
-After `npm run build`, the backend also serves the built admin UI from `/`.
-
-## Admin GUI
-
-The local admin panel includes:
-
-- `Dashboard`: runtime health, Teams session state, recent activity, and last run summaries
-- `Setup`: editable local config values backed by `.env`
-- `Alerts`: active, acknowledged, and cleared alerts with acknowledge and clear operations
-- `Manual Actions`: trigger runs, Teams session actions, test posts, and config validation
-- `Logs`: runtime logs and rule execution history
-- `Targets`: named target CRUD backed by the rules file
-- `Rules`: structured rule editing backed by the rules file
-
-## CLI
-
-```bash
-npm run cli -- start
-npm run cli -- run-trigger new_pr
-npm run cli -- run-trigger unread_message
-npm run cli -- alerts-clear
-npm run cli -- alerts-ack --key <dedupe-key>
-npm run cli -- state
-npm run cli -- teams-validate --wait
-npm run cli -- teams-send --target review_channel --text "RelayOps test"
-```
-
-## Local API
-
-The GUI uses the local API only. Key admin endpoints include:
-
-- `GET /api/status`
-- `GET /api/config`
-- `PUT /api/config`
-- `GET /api/rules-config`
-- `PUT /api/targets`
-- `PUT /api/rules`
-- `GET /api/alerts`
-- `POST /api/alerts/ack-all`
-- `POST /api/alerts/clear`
-- `GET /api/logs`
-- `POST /api/actions/run-trigger`
-- `POST /api/actions/teams/open`
-- `POST /api/actions/teams/test-post`
-- `POST /api/validate/config`
-
-## Repository Layout
-
-```text
-relayops/
-  src/
-    core/
-    adapters/
-      browser/
-      teams/
-      notifications/
-      git/
-      bitbucket/
-      ai/
-    rules/
-    state/
-    server/
-    cli/
-    shared/
-  web/
-    src/
-  examples/
-  docs/
-  plugins/
-```
-
-## Teams Web Notes
-
-- RelayOps uses a persistent Playwright browser profile. Set `RELAYOPS_BROWSER_PROFILE_DIR` to a local-only path.
-- Startup session validation is disabled by default for first-run usability. If you enable it and Teams Web is logged out, RelayOps keeps the local API/UI available and logs the startup validation failure instead of crashing.
-- The first run may require you to sign into Teams Web in the persistent browser window.
-- Prefer configuring Teams targets with a stable human-readable `label`. RelayOps now navigates by label first and treats a copied Teams link only as an optional fallback hint if label-based navigation does not resolve the target.
-- RelayOps normalizes Teams launcher URLs and attempts to auto-select `Use the web app instead` so copied links do not bounce automation into the desktop-app launcher flow. It also jumps from `launcher.html` to the decoded `https` Teams URL as early as possible to beat the `msteams:` protocol prompt.
-- On macOS, Safari/Chrome may show a system sheet: **“Open Microsoft Teams.app?”** Playwright cannot click that UI. RelayOps seeds Chromium `Preferences` to allow the `msteams` handler for `teams.microsoft.com`, blocks `msteams:` from `window.open` in-page, and still recommends checking **Always allow teams.microsoft.com to open links…** once in the dialog so the profile stops prompting. If a sheet is already open, dismiss it (Cancel or Open) so automation can continue.
-- Optional: `RELAYOPS_BROWSER_EXTRA_ARGS` adds space-separated Chromium flags for advanced setups.
-- Selectors are centralized in the Teams adapter for easier updates as Microsoft changes the UI.
-- Session validation now logs the current Teams URL and page title when it cannot determine whether the profile is ready or logged out.
-- UI actions use named fallback selector chains, interactability checks, retries, and screenshots on failure.
-
-## Rules Guardrails
-
-- `dedupeKey` gives each rule its own idempotency scope.
-- `cooldownMinutes` suppresses repeat execution even when new events continue to match.
-- Every rule decision is logged and persisted to SQLite execution history.
-- Alert acknowledgment and execution-key tracking are persisted in SQLite for traceability.
-
-## Bitbucket pull requests
-
-When `RELAYOPS_BITBUCKET_WORKSPACE`, `RELAYOPS_BITBUCKET_USERNAME`, and `RELAYOPS_BITBUCKET_APP_PASSWORD` are set, the `new_pr` trigger loads **open** pull requests from the [Bitbucket Cloud REST API](https://developer.atlassian.com/cloud/bitbucket/rest/api-group-pullrequests/) instead of `RELAYOPS_PR_SOURCE_PATH` / `RELAYOPS_PR_SOURCE_URL`. Use a [Bitbucket app password](https://support.atlassian.com/bitbucket-cloud/docs/app-passwords/) with repository read permission.
-
-- Set `RELAYOPS_BITBUCKET_REPOSITORIES` to a comma-separated list of actual repo slugs to avoid scanning the whole workspace.
-- Do not copy the literal `/workspace/pull-requests` segment from the Bitbucket web UI URL into `RELAYOPS_BITBUCKET_REPOSITORIES`; that path segment is the workspace PR page route, not a guaranteed repository slug.
-- Set `RELAYOPS_BITBUCKET_AUTHOR_UUID` to match your user filter in the Bitbucket web UI (only your PRs).
-
-Rules that use `trigger: new_pr` with `post_message` or `alert` then behave the same as with the JSON feed: each PR becomes an event (`etqdev/workspace#123`-style id) and idempotency/cooldowns use your rule `dedupeKey`.
-
-## Extension Points
-
-- Add new messaging backends by implementing `MessagingAdapter`.
-- Replace the mock PR source by implementing `PullRequestAdapter` (or configure Bitbucket as above).
-- Add richer summarization by implementing `SummaryAdapter`.
-- Add more actions and conditions in the rules engine without changing caller code.
-- Extend the local admin GUI by adding pages that consume the same `/api` contract.
-
-## Documentation
-
-- [Architecture](docs/architecture.md)
+Released under the [MIT license](LICENSE).

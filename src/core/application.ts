@@ -10,6 +10,7 @@ import type {
   AppConfig,
   Logger,
   MessageRecord,
+  MessageTarget,
   PullRequestAdapter,
   RuleConfig,
   RuleTrigger,
@@ -30,6 +31,10 @@ import type {
 } from "../shared/adminApi";
 import { RelayOpsServer } from "../server/appServer";
 import { SqliteStateStore } from "../state/stateStore";
+import { TeamsDirectory } from "../adapters/teams/teamsDirectory";
+import { TeamsApiError } from "../adapters/teams/teamsChatService";
+import type { TeamsDirectoryOptions, TeamsDirectoryView } from "../shared/adminApi";
+import { ActionLock } from "./actionLock";
 import { RelayLogger } from "./logger";
 import { RelayOpsOrchestrator, type TriggerRunSummary } from "./orchestrator";
 import { TriggerScheduler } from "./scheduler";
@@ -44,25 +49,28 @@ export class RelayOpsApplication {
   private readonly browser: PlaywrightBrowserManager;
   private readonly stateStore: SqliteStateStore;
   private readonly teamsAdapter: TeamsWebAdapter;
+  private readonly teamsDirectory: TeamsDirectory;
   private readonly alertsAdapter: LocalAlertAdapter;
-  private readonly prAdapter: PullRequestAdapter;
+  private prAdapter: PullRequestAdapter;
   private readonly summaryAdapter: PlaceholderSummaryAdapter;
   private readonly rulesEngine: RulesEngine;
   private readonly orchestrator: RelayOpsOrchestrator;
   private readonly scheduler: TriggerScheduler;
   private readonly server: RelayOpsServer;
+  private readonly actionLock = new ActionLock();
 
-  constructor() {
+  constructor(options?: { loggerOutput?: "stdout" | "stderr" }) {
     this.config = loadAppConfig();
     ensureRuntimeDirectories(this.config);
     this.rules = loadRulesConfig(this.config.rulesFile);
     this.configStore = new LocalConfigStore(process.cwd());
-    this.relayLogger = new RelayLogger(this.config.logLevel);
+    this.relayLogger = new RelayLogger(this.config.logLevel, 500, options?.loggerOutput ?? "stdout");
     this.logger = this.relayLogger;
     this.stateStore = new SqliteStateStore(this.config.databasePath);
     this.stateStore.initialize();
     this.browser = new PlaywrightBrowserManager(this.config, this.logger);
     this.teamsAdapter = new TeamsWebAdapter(this.browser, this.config, this.logger);
+    this.teamsDirectory = new TeamsDirectory(path.dirname(this.config.databasePath), this.teamsAdapter.chatService);
     this.alertsAdapter = new LocalAlertAdapter(this.logger, this.config);
     this.prAdapter = createPullRequestAdapter(this.config, this.logger);
     this.summaryAdapter = new PlaceholderSummaryAdapter();
@@ -82,7 +90,8 @@ export class RelayOpsApplication {
       rulesEngine: this.rulesEngine,
       messaging: this.teamsAdapter,
       pullRequests: this.prAdapter,
-      logger: this.logger
+      logger: this.logger,
+      actionLock: this.actionLock
     });
     this.scheduler = new TriggerScheduler(this.orchestrator, this.logger, {
       new_pr: this.config.scheduler.newPrIntervalMs,
@@ -114,10 +123,13 @@ export class RelayOpsApplication {
       }
     }
 
-    if (this.config.scheduler.enabled && !startupValidationFailed) {
+    if (this.config.scheduler.enabled) {
       this.scheduler.start();
-    } else if (this.config.scheduler.enabled && startupValidationFailed) {
-      this.logger.warn("Scheduler start skipped because Teams startup validation failed");
+      if (startupValidationFailed) {
+        this.logger.warn(
+          "Scheduler started despite Teams startup validation failure; unread_message/Teams actions may fail until the session is ready"
+        );
+      }
     }
 
     if (this.config.server.enabled) {
@@ -210,6 +222,9 @@ export class RelayOpsApplication {
           }
         : undefined;
     this.config.logLevel = input.logLevel;
+
+    this.prAdapter = createPullRequestAdapter(this.config, this.logger);
+    this.orchestrator.setPullRequestAdapter(this.prAdapter);
 
     const persistedRules = this.configStore.loadRulesFile(this.config.rulesFile);
     this.config.rulesFile = persistedRules.filePath;
@@ -323,25 +338,89 @@ export class RelayOpsApplication {
     };
   }
 
+  private async resolveTeamsTarget(targetName: string): Promise<MessageTarget> {
+    const configured = this.rules.targets?.[targetName];
+    if (configured) return { name: targetName, ...configured };
+    if (/^https?:/i.test(targetName)) return { name: targetName, url: targetName };
+    if (/^(?:19|48):/.test(targetName)) {
+      return { name: targetName, url: `https://teams.microsoft.com/l/chat/${encodeURIComponent(targetName)}/conversations` };
+    }
+    if (["me", "myself", "notes"].includes(targetName.trim().toLowerCase())) return { name: targetName, label: targetName };
+    if (this.teamsDirectory.view().stale) await this.refreshTeamsDirectoryUnlocked();
+    let found = this.teamsDirectory.resolve(targetName);
+    if (!found) {
+      await this.refreshTeamsDirectoryUnlocked();
+      found = this.teamsDirectory.resolve(targetName);
+    }
+    if (!found) throw new Error(`No exact Teams destination matches "${targetName}". Search the Teams directory for a name or ID.`);
+    return { name: targetName, label: found.displayName, url: found.url };
+  }
+
   async teamsSend(targetName: string, text: string): Promise<void> {
-    const target = this.rules.targets?.[targetName] ?? { label: targetName, name: targetName };
-    await this.teamsAdapter.postMessage({ name: targetName, ...target }, text);
-  }
-
-  async teamsRead(targetName: string, limit = 10): Promise<MessageRecord[]> {
-    const target = this.rules.targets?.[targetName] ?? { label: targetName, name: targetName };
-    return this.teamsAdapter.readMessages({ name: targetName, ...target }, limit);
-  }
-
-  async validateTeamsSession(waitForLogin = false): Promise<void> {
-    await this.teamsAdapter.validateSession({
-      reason: "manual_validation",
-      waitForLogin
+    await this.actionLock.runExclusive(`teams-send:${targetName}`, async () => {
+      const target = await this.resolveTeamsTarget(targetName);
+      await this.teamsAdapter.postMessage(target, text);
     });
   }
 
+  async teamsRead(targetName: string, limit = 10): Promise<MessageRecord[]> {
+    return this.actionLock.runExclusive(`teams-read:${targetName}`, async () => {
+      const target = await this.resolveTeamsTarget(targetName);
+      return this.teamsAdapter.readMessages(target, limit);
+    });
+  }
+
+  private async refreshTeamsDirectoryUnlocked(): Promise<void> {
+    if (!this.teamsAdapter.chatService.hasValidToken()) {
+      await this.teamsAdapter.validateSession({ reason: "directory_refresh", waitForLogin: false });
+    }
+    try {
+      await this.teamsDirectory.refresh();
+    } catch (error) {
+      if (!(error instanceof TeamsApiError) || error.status !== 401) throw error;
+      await this.teamsAdapter.validateSession({ reason: "directory_reauthenticate", waitForLogin: false });
+      await this.teamsDirectory.refresh();
+    }
+  }
+
+  async getTeamsDirectory(options: TeamsDirectoryOptions = {}): Promise<TeamsDirectoryView> {
+    if (options.refresh) {
+      try {
+        await this.actionLock.runExclusive("teams-discovery", () => this.refreshTeamsDirectoryUnlocked());
+      } catch (error) {
+        return {
+          ...this.teamsDirectory.view(options), stale: true,
+          api: {
+            state: error instanceof TeamsApiError ? error.code : "api_error",
+            message: error instanceof Error ? error.message : String(error)
+          }
+        };
+      }
+    }
+    return this.teamsDirectory.view(options);
+  }
+
+  async validateTeamsSession(waitForLogin = false): Promise<void> {
+    await this.actionLock.runExclusive("teams-validate", () =>
+      this.teamsAdapter.validateSession({
+        reason: "manual_validation",
+        waitForLogin
+      })
+    );
+  }
+
   async openTeamsSession(): Promise<void> {
-    await this.teamsAdapter.openSession();
+    await this.actionLock.runExclusive("teams-open", () => this.teamsAdapter.openSession());
+  }
+
+  async listTeamsConversations(pageSize = 30) {
+    const view = await this.getTeamsDirectory({ limit: pageSize, refresh: this.teamsDirectory.view().stale });
+    if (view.api.state !== "ready") throw new Error(view.api.message ?? "Teams directory unavailable.");
+    return view.entries;
+  }
+
+  getTeamsAdapter(): TeamsWebAdapter {
+    return this.teamsAdapter;
   }
 
   validateConfig(): ValidationResult {

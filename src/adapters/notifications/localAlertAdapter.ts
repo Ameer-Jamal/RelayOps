@@ -26,7 +26,7 @@ export class LocalAlertAdapter implements AlertAdapter {
       this.logger.warn("Desktop notification delivery failed, falling back to terminal bell", {
         error: error instanceof Error ? error.message : String(error)
       });
-      process.stdout.write("\u0007");
+      process.stderr.write("\u0007");
     }
 
     this.logger.info("Alert triggered", {

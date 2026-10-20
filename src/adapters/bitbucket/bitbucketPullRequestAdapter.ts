@@ -24,6 +24,14 @@ interface BbPr {
   links: { html: { href: string } };
 }
 
+class BitbucketApiError extends Error {
+  constructor(readonly status: number) {
+    super(status === 401
+      ? "Bitbucket authentication failed (HTTP 401). In Setup, use your Atlassian account email and a Bitbucket API token; app passwords are no longer supported."
+      : `Bitbucket API failed (HTTP ${status}). Check repository access and token scopes.`);
+  }
+}
+
 export class BitbucketPullRequestAdapter implements PullRequestAdapter {
   constructor(
     private readonly cfg: BitbucketPrSourceConfig,
@@ -37,7 +45,13 @@ export class BitbucketPullRequestAdapter implements PullRequestAdapter {
   }
 
   private async fetchPage<T>(url: string): Promise<BitbucketPage<T>> {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" || parsed.hostname !== "api.bitbucket.org") {
+      throw new Error("Refusing to send Bitbucket credentials to an unexpected API host.");
+    }
     const response = await fetch(url, {
+      signal: AbortSignal.timeout(20_000),
+      redirect: "error",
       headers: {
         Authorization: this.authorizationHeader(),
         Accept: "application/json"
@@ -45,10 +59,7 @@ export class BitbucketPullRequestAdapter implements PullRequestAdapter {
     });
 
     if (!response.ok) {
-      const text = await response.text();
-      throw new Error(
-        `Bitbucket API ${response.status} for ${url.replace(/pagelen=\d+.*$/, "…")}: ${text.slice(0, 240)}`
-      );
+      throw new BitbucketApiError(response.status);
     }
 
     return response.json() as Promise<BitbucketPage<T>>;
@@ -60,6 +71,7 @@ export class BitbucketPullRequestAdapter implements PullRequestAdapter {
       this.cfg.repositorySlugs.length > 0 ? this.cfg.repositorySlugs : await this.listAllRepositorySlugs();
 
     const merged: PullRequestRecord[] = [];
+    let repositoriesFailed = 0;
     for (const slug of slugs) {
       if (merged.length >= cap) {
         break;
@@ -68,6 +80,8 @@ export class BitbucketPullRequestAdapter implements PullRequestAdapter {
         const batch = await this.fetchOpenPullRequestsForRepository(slug, cap - merged.length);
         merged.push(...batch);
       } catch (error) {
+        if (error instanceof BitbucketApiError && (error.status === 401 || error.status === 403)) throw error;
+        repositoriesFailed += 1;
         this.logger.warn("Bitbucket pull request list failed for repository", {
           workspace: this.cfg.workspace,
           slug,
@@ -76,6 +90,9 @@ export class BitbucketPullRequestAdapter implements PullRequestAdapter {
       }
     }
 
+    if (slugs.length > 0 && repositoriesFailed === slugs.length) {
+      throw new Error("Failed to read pull requests from every configured repository. Check the repository slugs, credentials, and execution logs.");
+    }
     merged.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
     const sliced = merged.slice(0, cap);
     this.logger.debug("Bitbucket open pull requests loaded", { count: sliced.length, workspace: this.cfg.workspace });

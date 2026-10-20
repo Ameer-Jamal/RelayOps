@@ -8,8 +8,6 @@ export const teamsSelectors = {
     { description: "app header by data-tid", selector: '[data-tid="app-layout-area--header"]' },
     { description: "main content area by data-tid", selector: '[data-tid="app-layout-area--main"]' },
     { description: "left navigation by data-tid", selector: '[data-tid="app-layout-area--left-nav"]' },
-    { description: "navigation role", selector: '[role="navigation"]' },
-    { description: "main role", selector: '[role="main"]' },
     { description: "search region", selector: '[data-tid="search-input"]' }
   ],
   loginHints: [
@@ -42,8 +40,7 @@ export const teamsSelectors = {
   ],
   messageItems: [
     { description: "chat pane item", selector: '[data-tid="chat-pane-item"]' },
-    { description: "message pane list item", selector: '[data-tid="message-pane-list-item"]' },
-    { description: "generic list item", selector: '[role="listitem"]' }
+    { description: "message pane list item", selector: '[data-tid="message-pane-list-item"]' }
   ],
   unreadIndicators: [
     { description: "aria-label unread indicator", selector: '[aria-label*="unread" i]' },

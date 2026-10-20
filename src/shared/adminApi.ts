@@ -176,3 +176,41 @@ export interface ManualActionResult {
   message: string;
   details?: Record<string, unknown>;
 }
+
+export interface TeamsDirectoryEntry {
+  id: string;
+  displayName: string;
+  kind: "chat" | "channel";
+  chatType?: "self" | "oneOnOne" | "group" | "meeting" | "bot";
+  teamName?: string;
+  memberNames: string[];
+  memberEmails: string[];
+  aliases: string[];
+  url: string;
+}
+
+export interface TeamsDirectoryOptions {
+  query?: string;
+  kind?: "all" | "person" | "chat" | "channel";
+  limit?: number;
+  offset?: number;
+  refresh?: boolean;
+}
+
+export interface TeamsDirectoryView {
+  accountEmail?: string;
+  updatedAt: string | null;
+  stale: boolean;
+  complete: boolean;
+  total: number;
+  matched: number;
+  offset: number;
+  nextOffset: number | null;
+  entries: TeamsDirectoryEntry[];
+  api: {
+    state: "not_connected" | "ready" | "auth_required" | "permission_denied" | "rate_limited" | "api_error";
+    endpoint?: string;
+    message?: string;
+  };
+  warnings: string[];
+}

@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { Command } from "commander";
 import { createRelayOpsApplication } from "../core/application";
 import type { RuleTrigger } from "../types";

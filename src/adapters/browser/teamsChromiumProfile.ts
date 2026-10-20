@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import type { Logger } from "../../types";
 
 /**
@@ -73,5 +74,42 @@ export function mergeTeamsProtocolHandlerPreferences(profileDir: string, logger:
       prefsPath,
       error: error instanceof Error ? error.message : String(error)
     });
+  }
+}
+
+/**
+ * Chromium creates lock files (SingletonLock, SingletonSocket, SingletonCookie)
+ * in the profile directory. If a previous run was killed or crashed, these lock files
+ * cause Playwright launch to fail with "Failed to create a ProcessSingleton for your profile".
+ * This function detects if the locking process is dead and removes stale locks.
+ */
+export function cleanStaleChromiumLocks(profileDir: string, logger: Logger): void {
+  const lockPath = path.join(profileDir, "SingletonLock");
+  try {
+    // Only SingletonLock identifies the owner. Socket/cookie suffixes are not PIDs.
+    if (!fs.lstatSync(lockPath, { throwIfNoEntry: false })?.isSymbolicLink()) return;
+    const target = fs.readlinkSync(lockPath);
+    const match = target.match(/^(.*)-(\d+)$/);
+    if (!match || match[1] !== os.hostname()) return;
+    const pid = Number(match[2]);
+    if (!Number.isSafeInteger(pid) || pid <= 0) return;
+    try {
+      process.kill(pid, 0);
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") return;
+    }
+    for (const name of ["SingletonSocket", "SingletonCookie", "SingletonLock"]) {
+      try {
+        fs.unlinkSync(path.join(profileDir, name));
+        logger.info("Removed stale Chromium lock", { file: name });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          logger.warn("Could not remove stale Chromium lock", { file: name });
+        }
+      }
+    }
+  } catch {
+    // Leave locks alone unless a local owner was positively identified as dead.
   }
 }

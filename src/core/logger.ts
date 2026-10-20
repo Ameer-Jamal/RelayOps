@@ -13,7 +13,8 @@ export class RelayLogger implements Logger {
 
   constructor(
     private readonly level: LogLevel,
-    private readonly maxEntries = 500
+    private readonly maxEntries = 500,
+    private readonly output: "stdout" | "stderr" = "stdout"
   ) {}
 
   debug(message: string, metadata?: Record<string, unknown>): void {
@@ -51,7 +52,7 @@ export class RelayLogger implements Logger {
 
     const line = JSON.stringify(payload);
 
-    if (level === "error") {
+    if (level === "error" || this.output === "stderr") {
       process.stderr.write(`${line}\n`);
       return;
     }

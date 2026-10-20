@@ -10,12 +10,14 @@ import type {
 } from "../types";
 import type { PullRequestRecord, StateStore } from "../types";
 import { RulesEngine } from "../rules/rulesEngine";
+import type { ActionLock } from "./actionLock";
 
 export interface TriggerRunSummary {
   trigger: RuleTrigger;
   eventsSeen: number;
   rulesExecuted: number;
   rulesSkipped: number;
+  rulesFailed: number;
 }
 
 interface OrchestratorDependencies {
@@ -24,25 +26,55 @@ interface OrchestratorDependencies {
   messaging: MessagingAdapter;
   pullRequests: PullRequestAdapter;
   logger: Logger;
+  actionLock: ActionLock;
 }
 
 export class RelayOpsOrchestrator {
-  constructor(private readonly dependencies: OrchestratorDependencies) {}
+  private pullRequests: PullRequestAdapter;
+
+  constructor(private readonly dependencies: OrchestratorDependencies) {
+    this.pullRequests = dependencies.pullRequests;
+  }
+
+  setPullRequestAdapter(adapter: PullRequestAdapter): void {
+    this.pullRequests = adapter;
+  }
 
   async runTrigger(trigger: RuleTrigger, options?: TriggerRunOptions): Promise<TriggerRunSummary> {
+    return this.dependencies.actionLock.runExclusive(`run-trigger:${trigger}`, () =>
+      this.runTriggerUnlocked(trigger, options)
+    );
+  }
+
+  private async runTriggerUnlocked(
+    trigger: RuleTrigger,
+    options?: TriggerRunOptions
+  ): Promise<TriggerRunSummary> {
     const events = await this.collectEvents(trigger);
     let rulesExecuted = 0;
     let rulesSkipped = 0;
+    let rulesFailed = 0;
 
     for (const event of events) {
-      const observation = this.dependencies.state.observeEvent(event);
-      const results = await this.dependencies.rulesEngine.executeForEvent(event, observation, options);
-      for (const result of results) {
-        if (result.executed) {
-          rulesExecuted += 1;
-        } else {
-          rulesSkipped += 1;
+      try {
+        const observation = this.dependencies.state.observeEvent(event);
+        const results = await this.dependencies.rulesEngine.executeForEvent(event, observation, options);
+        for (const result of results) {
+          if (result.executed) {
+            rulesExecuted += 1;
+          } else if (result.failed) {
+            rulesFailed += 1;
+          } else {
+            rulesSkipped += 1;
+          }
         }
+      } catch (error) {
+        this.dependencies.logger.error("Trigger event handling failed; continuing with remaining events", {
+          trigger,
+          eventId: event.id,
+          error: error instanceof Error ? error.message : String(error)
+        });
+        rulesFailed += 1;
       }
     }
 
@@ -51,6 +83,7 @@ export class RelayOpsOrchestrator {
       eventsSeen: events.length,
       rulesExecuted,
       rulesSkipped,
+      rulesFailed,
       ignoreGuards: Boolean(options?.ignoreGuards)
     });
 
@@ -58,7 +91,8 @@ export class RelayOpsOrchestrator {
       trigger,
       eventsSeen: events.length,
       rulesExecuted,
-      rulesSkipped
+      rulesSkipped,
+      rulesFailed
     };
   }
 
@@ -86,7 +120,7 @@ export class RelayOpsOrchestrator {
   }
 
   private async collectPullRequestEvents(): Promise<TriggerEvent<PullRequestRecord>[]> {
-    const items = await this.dependencies.pullRequests.readOpenPullRequests();
+    const items = await this.pullRequests.readOpenPullRequests();
     return items.map((item) => ({
       trigger: "new_pr",
       id: item.id,

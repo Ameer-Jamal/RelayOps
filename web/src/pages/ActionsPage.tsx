@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
-import type { TargetRecord, ValidationResult } from "@relayops/shared/adminApi";
+import type { TargetRecord, ValidationResult, TeamsDirectoryEntry } from "@relayops/shared/adminApi";
+import { DestinationPicker } from "../components/DestinationPicker";
 import { apiRequest } from "../api/client";
 import { Card, ErrorBanner, PageHeader, SuccessBanner } from "../components/Common";
 import { useApiData } from "../hooks/useApiData";
@@ -26,6 +27,7 @@ export function ActionsPage() {
   const { data: targets } = useApiData(loadTargets);
   const [trigger, setTrigger] = useState<"new_pr" | "unread_message" | "manual">("new_pr");
   const [ignoreGuards, setIgnoreGuards] = useState(false);
+  const [selectedDestination, setSelectedDestination] = useState<TeamsDirectoryEntry | null>(null);
   const [target, setTarget] = useState<string>("");
   const [text, setText] = useState<string>("RelayOps test message");
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -38,13 +40,13 @@ export function ActionsPage() {
     /^example\b/i.test(selectedTarget?.label ?? "") || /example-placeholder/i.test(selectedTarget?.url ?? "");
   const isBusy = busyKey !== null;
 
-  async function runAction<T>(key: BusyKey, loader: () => Promise<T>, success: string): Promise<void> {
+  async function runAction(key: BusyKey, loader: () => Promise<unknown>, success: string): Promise<void> {
     setFeedback(null);
     setError(null);
     setBusyKey(key);
     try {
-      await loader();
-      setFeedback(success);
+      const result = await loader();
+      setFeedback(typeof result === "string" && result.trim() ? result : success);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -129,14 +131,24 @@ export function ActionsPage() {
             onClick={() =>
               void runAction(
                 "run-trigger",
-                () =>
-                  apiRequest("/api/actions/run-trigger", {
+                async () => {
+                  const summary = await apiRequest<{
+                    trigger: string;
+                    eventsSeen: number;
+                    rulesExecuted: number;
+                    rulesSkipped: number;
+                    rulesFailed: number;
+                  }>("/api/actions/run-trigger", {
                     method: "POST",
                     body: JSON.stringify({ trigger, ignoreGuards })
-                  }),
-                ignoreGuards
-                  ? `Trigger ${trigger} finished with guard overrides.`
-                  : `Trigger ${trigger} finished.`
+                  });
+                  if (summary.rulesFailed > 0) {
+                    throw new Error(`Trigger ${summary.trigger}: ${summary.rulesFailed} rule(s) failed; ${summary.rulesExecuted} executed. Check execution history for details.`);
+                  }
+                  const mode = ignoreGuards ? " (guards ignored)" : "";
+                  return `Trigger ${summary.trigger}${mode}: ${summary.eventsSeen} event(s), ${summary.rulesExecuted} rule(s) executed, ${summary.rulesSkipped} skipped.`;
+                },
+                `Trigger ${trigger} finished.`
               )
             }
             type="button"
@@ -149,9 +161,12 @@ export function ActionsPage() {
             Waits for the real send to finish. Keep the automation browser window visible; the API call can take up to a minute.
           </p>
           <div className="form-grid">
+            <DestinationPicker value={selectedDestination} disabled={isBusy} onChange={(entry) => { setSelectedDestination(entry); setTarget(entry.id); }} />
+            <details>
+              <summary>Use a saved alias instead</summary>
             <label>
-              <span>Target</span>
-              <select value={target} disabled={isBusy} onChange={(event) => setTarget(event.target.value)}>
+              <span>Saved alias</span>
+              <select value={target} disabled={isBusy} onChange={(event) => { setTarget(event.target.value); setSelectedDestination(null); }}>
                 <option value="">Select target</option>
                 {(targets ?? []).map((item) => (
                   <option key={item.name} value={item.name}>
@@ -160,6 +175,7 @@ export function ActionsPage() {
                 ))}
               </select>
             </label>
+            </details>
             {selectedTargetIsExample ? (
               <ErrorBanner message="This target still uses the public example placeholder. Update the target label in the Targets page before sending a test post." />
             ) : null}

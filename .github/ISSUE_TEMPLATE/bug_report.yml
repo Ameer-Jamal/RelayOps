@@ -1,0 +1,22 @@
+name: Bug report
+description: Report a reproducible RelayOps problem
+body:
+  - type: markdown
+    attributes:
+      value: Do not include tokens, .env files, browser profiles, private recipients, or raw network exports.
+  - type: input
+    id: version
+    attributes:
+      label: RelayOps version and operating system
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps, expected behavior, and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics

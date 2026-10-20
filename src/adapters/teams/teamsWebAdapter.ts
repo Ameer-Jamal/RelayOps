@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { withRetry } from "../../core/retry";
 import type {
@@ -11,6 +12,8 @@ import type {
 } from "../../types";
 import { PlaywrightBrowserManager } from "../browser/playwrightBrowser";
 import { type SelectorCandidate, teamsSelectors } from "./selectors";
+import { TeamsChatService } from "./teamsChatService";
+import { TeamsTokenCapture } from "./tokenCapture";
 
 interface LocatorCandidate {
   description: string;
@@ -41,21 +44,30 @@ function sleep(ms: number): Promise<void> {
 
 export class TeamsWebAdapter implements MessagingAdapter {
   private lastObservedSessionState: SessionState = "unknown";
+  readonly chatService: TeamsChatService;
+  readonly tokenCapture: TeamsTokenCapture;
 
   constructor(
     private readonly browser: PlaywrightBrowserManager,
     private readonly config: AppConfig,
-    private readonly logger: Logger
-  ) {}
+    private readonly logger: Logger,
+    chatService?: TeamsChatService
+  ) {
+    this.chatService =
+      chatService ?? new TeamsChatService(path.dirname(config.databasePath), logger, config.browser.profileDir);
+    this.tokenCapture = new TeamsTokenCapture(this.chatService, logger);
+  }
 
   async validateSession(options?: { reason?: string; waitForLogin?: boolean }): Promise<void> {
     const page = await this.browser.getPage();
+    await this.tokenCapture.attach(page);
     const reason = options?.reason ?? "operation";
     await this.safeGoto(page, this.config.teams.baseUrl, { label: `teams-home:${reason}` });
 
     const observation = await this.waitForKnownSessionState(page, reason);
     this.lastObservedSessionState = observation.state;
     if (observation.state === "ready") {
+      await this.tokenCapture.waitForToken();
       this.logger.info("Teams session validated", { reason });
       return;
     }
@@ -72,6 +84,7 @@ export class TeamsWebAdapter implements MessagingAdapter {
 
       if (shouldWait) {
         await this.waitForLogin(page, reason);
+        await this.tokenCapture.waitForToken();
         return;
       }
 
@@ -101,12 +114,45 @@ export class TeamsWebAdapter implements MessagingAdapter {
 
   async openSession(): Promise<void> {
     const page = await this.browser.getPage();
+    await this.tokenCapture.attach(page);
     await this.safeGoto(page, this.config.teams.baseUrl, { label: "teams-open-session" });
   }
 
   async postMessage(target: MessageTarget, text: string): Promise<void> {
+    this.assertTargetIsConfigured(target);
+    // 1. Fast path: If a valid Chat Service token exists, send via REST API
+    if (this.chatService.hasValidToken()) {
+      const result = await this.chatService.postMessage(target, text);
+      if (result.success) {
+        this.logger.info("Teams message posted via Chat Service API", {
+          target: target.label ?? target.url,
+          messageId: result.messageId
+        });
+        return;
+      }
+      this.logger.warn("Chat Service API post failed; checking browser session", {
+        error: result.error
+      });
+    }
+
+    // 2. Open browser page and attach token capture
     const page = await this.browser.getPage();
+    await this.tokenCapture.attach(page);
     await this.validateSession({ reason: "post_message", waitForLogin: false });
+
+    // 3. Retry API if token was captured during session validation
+    if (this.chatService.hasValidToken()) {
+      const result = await this.chatService.postMessage(target, text);
+      if (result.success) {
+        this.logger.info("Teams message posted via captured token", {
+          target: target.label ?? target.url,
+          messageId: result.messageId
+        });
+        return;
+      }
+    }
+
+    // 4. Fallback to DOM automation
     this.assertTargetIsConfigured(target);
     await this.navigateToTarget(page, target);
 
@@ -121,16 +167,36 @@ export class TeamsWebAdapter implements MessagingAdapter {
       label: `teams-send:${target.label ?? target.url ?? "unknown"}`
     });
 
-    this.logger.info("Teams message posted", { target: target.label ?? target.url });
+    this.logger.info("Teams message posted via DOM automation", { target: target.label ?? target.url });
+  }
+
+  private async readApiMessages(target: MessageTarget, limit: number): Promise<MessageRecord[]> {
+    const conversationId = this.chatService.resolveConversationId(target) ??
+      this.chatService.resolveConversationId(target, await this.chatService.fetchConversations());
+    if (!conversationId) throw new Error("Could not resolve an exact Teams target; use a conversation ID.");
+    const messages = await this.chatService.fetchMessages(conversationId, { pageSize: limit });
+    return messages.map((m) => ({ id: m.id, target, text: m.content, author: m.from, timestamp: m.timestamp }));
   }
 
   async readMessages(target: MessageTarget, limit = 10): Promise<MessageRecord[]> {
+    if (this.chatService.hasValidToken()) {
+      try {
+        return await this.readApiMessages(target, limit);
+      } catch (error) {
+        this.logger.warn("Chat Service API read failed; refreshing browser session", {
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+
     const page = await this.browser.getPage();
+    await this.tokenCapture.attach(page);
     await this.validateSession({ reason: "read_messages", waitForLogin: false });
+    if (this.chatService.hasValidToken()) return this.readApiMessages(target, limit);
     this.assertTargetIsConfigured(target);
     await this.navigateToTarget(page, target);
 
-    const items = await this.safeLocateAll(this.selectorCandidates(page, teamsSelectors.messageItems), {
+    const items = await this.safeLocateAll(this.selectorAllCandidates(page, teamsSelectors.messageItems), {
       label: `teams-message-items:${target.label ?? target.url ?? "unknown"}`
     });
     const selected = items.slice(Math.max(0, items.length - limit));
@@ -163,7 +229,7 @@ export class TeamsWebAdapter implements MessagingAdapter {
     await this.validateSession({ reason: "read_unread", waitForLogin: false });
 
     const results = new Map<string, UnreadMessageRecord>();
-    const indicators = await this.safeLocateAll(this.selectorCandidates(page, teamsSelectors.unreadIndicators), {
+    const indicators = await this.safeLocateAll(this.selectorAllCandidates(page, teamsSelectors.unreadIndicators), {
       label: "teams-unread-indicators",
       allowEmpty: true
     });
@@ -189,16 +255,24 @@ export class TeamsWebAdapter implements MessagingAdapter {
         label: `teams-unread-href:${index}`,
         allowEmpty: true
       });
-      const id = buildId(`${normalizedLabel}:${href}`);
+      const stableLabel = normalizedLabel
+        .replace(/\d+\s*unread(?:\s*messages?)?/gi, "")
+        .replace(/\(\d+\)/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+      const id = buildId(href || stableLabel || normalizedLabel);
       results.set(id, {
         id,
-        label: normalizedLabel,
+        label: stableLabel || normalizedLabel,
         target: {
-          label: normalizedLabel,
+          label: stableLabel || normalizedLabel,
           url: href || undefined
         },
         url: href || undefined,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        raw: {
+          ariaLabel: normalizedLabel
+        }
       });
     }
 
@@ -617,6 +691,18 @@ export class TeamsWebAdapter implements MessagingAdapter {
     }));
   }
 
+  /** Locators for locate-all (must not use .first() — that caps results at 1). */
+  private selectorAllCandidates(page: Page, selectors: readonly SelectorCandidate[]): LocatorCandidate[] {
+    return selectors.map((candidate) => ({
+      description: candidate.description,
+      resolve: () => page.locator(candidate.selector)
+    }));
+  }
+
+  private probeTimeoutMs(): number {
+    return Math.min(250, this.config.teams.selectorTimeoutMs);
+  }
+
   private async isTeamsOopsErrorPage(page: Page): Promise<boolean> {
     const url = page.url().toLowerCase();
     if (url.includes("/error/eoa")) {
@@ -714,6 +800,11 @@ export class TeamsWebAdapter implements MessagingAdapter {
     const launcherButtonCandidates = this.selectorCandidates(page, teamsSelectors.launcherUseWebApp);
 
     for (let hop = 0; hop < 6; hop += 1) {
+      if (await this.isTeamsOopsErrorPage(page)) {
+        await this.recoverFromTeamsOopsPage(page, `${label}-loop`);
+        continue;
+      }
+
       const currentUrl = page.url();
 
       if (this.isLauncherUrl(currentUrl)) {
@@ -945,9 +1036,7 @@ export class TeamsWebAdapter implements MessagingAdapter {
   ): Promise<{ locator: Locator; description: string }> {
     for (const candidate of candidates) {
       const locator = candidate.resolve();
-      const visible = await locator
-        .isVisible({ timeout: this.config.teams.selectorTimeoutMs })
-        .catch(() => false);
+      const visible = await locator.isVisible({ timeout: this.probeTimeoutMs() }).catch(() => false);
 
       if (!visible) {
         this.logger.debug("Teams selector candidate not visible", {
@@ -981,7 +1070,7 @@ export class TeamsWebAdapter implements MessagingAdapter {
     for (const candidate of candidates) {
       const visible = await candidate
         .resolve()
-        .isVisible({ timeout: this.config.teams.selectorTimeoutMs })
+        .isVisible({ timeout: this.probeTimeoutMs() })
         .catch(() => false);
       if (visible) {
         this.logger.debug("Teams selector candidate visible", {

@@ -1,6 +1,6 @@
 {
   "name": "relayops",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Public-first, local-first automation platform for browser-driven workflows.",
   "license": "MIT",
   "private": true,
@@ -18,29 +18,51 @@
     "dev:all": "concurrently -k \"npm run dev:api\" \"wait-on tcp:127.0.0.1:4317 && npm run ui:dev\"",
     "start": "node dist/main.js",
     "cli": "tsx src/cli/index.ts",
+    "mcp": "node dist/mcp/index.js",
     "typecheck": "npm run typecheck:api && npm run typecheck --workspace web",
     "typecheck:api": "tsc --noEmit -p tsconfig.json",
     "ui:dev": "npm run dev --workspace web",
-    "ui:build": "npm run build --workspace web"
+    "ui:build": "npm run build --workspace web",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "mcp:dev": "tsx src/mcp/index.ts",
+    "test:e2e": "playwright test",
+    "verify": "npm run typecheck && npm test && npm run build && npm run test:e2e",
+    "release:package": "node scripts/package-release.mjs"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "better-sqlite3": "^11.8.1",
     "commander": "^12.1.0",
     "dotenv": "^16.5.0",
     "express": "^4.21.2",
-    "node-notifier": "^10.0.1",
+    "node-notifier": "^11.0.0",
     "playwright": "^1.53.0",
     "yaml": "^2.8.0",
     "zod": "^4.1.5"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@types/better-sqlite3": "^7.6.13",
     "@types/express": "^5.0.3",
     "@types/node": "^24.1.0",
     "@types/node-notifier": "^8.0.5",
     "concurrently": "^9.1.2",
-    "tsx": "^4.20.3",
+    "tsx": "^4.23.15",
     "typescript": "^5.8.3",
     "wait-on": "^8.0.5"
-  }
+  },
+  "engines": {
+    "node": ">=22.22.2 <23"
+  },
+  "overrides": {
+    "qs": "^6.16.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ameer-Jamal/RelayOps.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Ameer-Jamal/RelayOps/issues"
+  },
+  "homepage": "https://github.com/Ameer-Jamal/RelayOps#readme"
 }

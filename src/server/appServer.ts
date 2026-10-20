@@ -107,6 +107,22 @@ export class RelayOpsServer {
       sendSuccess(response, this.app.validateConfig());
     });
 
+    server.get("/api/teams/directory", asyncHandler(async (request, response) => {
+      const query = typeof request.query.query === "string" ? request.query.query.slice(0, 200) : undefined;
+      const limit = Number(request.query.limit ?? 50);
+      const offset = Number(request.query.offset ?? 0);
+      const kind = String(request.query.kind ?? "all");
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100 || !Number.isInteger(offset) || offset < 0 || !["all", "person", "chat", "channel"].includes(kind)) {
+        sendFailure(response, "Use limit 1–100, a nonnegative integer offset, and a valid destination type.", 400);
+        return;
+      }
+      sendSuccess(response, await this.app.getTeamsDirectory({ query, limit, offset, kind: kind as "all" | "person" | "chat" | "channel" }));
+    }));
+
+    server.post("/api/teams/directory/refresh", asyncHandler(async (_request, response) => {
+      sendSuccess(response, await this.app.getTeamsDirectory({ refresh: true, limit: 50 }));
+    }));
+
     server.get("/api/targets", (_request, response) => {
       sendSuccess(response, this.app.getRulesConfigView().targets);
     });

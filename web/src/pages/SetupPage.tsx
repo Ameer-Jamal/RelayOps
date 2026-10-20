@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent } from "react";
 import type { SetupConfigUpdateInput, SetupConfigView, ValidationResult } from "@relayops/shared/adminApi";
+import { apiRequest } from "../api/client";
+import { Card, ErrorBanner, LoadingState, PageHeader, SuccessBanner } from "../components/Common";
+import { useApiData } from "../hooks/useApiData";
 
 function setupConfigFingerprint(data: SetupConfigView): string {
   return JSON.stringify({
@@ -23,15 +26,13 @@ function setupConfigFingerprint(data: SetupConfigView): string {
     logLevel: data.logLevel
   });
 }
-import { apiRequest } from "../api/client";
-import { Card, ErrorBanner, LoadingState, PageHeader, SuccessBanner } from "../components/Common";
-import { useApiData } from "../hooks/useApiData";
 
 export function SetupPage() {
   const loadConfig = useCallback(() => apiRequest<SetupConfigView>("/api/config"), []);
   const { data, loading, error, reload } = useApiData(loadConfig);
   const [form, setForm] = useState<SetupConfigUpdateInput | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [saving, setSaving] = useState(false);
   const [showBitbucketAppPassword, setShowBitbucketAppPassword] = useState(false);
@@ -76,17 +77,33 @@ export function SetupPage() {
       return;
     }
 
+    if (!Number.isFinite(form.newPrIntervalMs) || form.newPrIntervalMs < 1000) {
+      setSaveError("New PR poll interval must be a number of at least 1000 ms.");
+      setMessage(null);
+      return;
+    }
+    if (!Number.isFinite(form.unreadMessageIntervalMs) || form.unreadMessageIntervalMs < 1000) {
+      setSaveError("Unread message poll interval must be a number of at least 1000 ms.");
+      setMessage(null);
+      return;
+    }
+
     setSaving(true);
     setMessage(null);
+    setSaveError(null);
     try {
       const result = await apiRequest<{ config: SetupConfigView; requiresRestart: boolean }>("/api/config", {
         method: "PUT",
         body: JSON.stringify(form)
       });
-      setMessage(result.requiresRestart ? "Saved. Restart RelayOps to apply all changes." : "Saved.");
+      setMessage(
+        result.requiresRestart
+          ? "Saved. Restart RelayOps if browser profile/path settings still look stale; Bitbucket credentials apply immediately."
+          : "Saved."
+      );
       await reload();
     } catch (caught) {
-      setMessage(caught instanceof Error ? caught.message : String(caught));
+      setSaveError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       setSaving(false);
     }
@@ -168,6 +185,7 @@ export function SetupPage() {
         }
       />
       {error ? <ErrorBanner message={error} /> : null}
+      {saveError ? <ErrorBanner message={saveError} /> : null}
       {message ? <SuccessBanner message={message} /> : null}
       {loading && !form ? <LoadingState /> : null}
       {form ? (
@@ -198,16 +216,26 @@ export function SetupPage() {
                 <span>New PR Poll Interval (ms)</span>
                 <input
                   type="number"
-                  value={form.newPrIntervalMs}
-                  onChange={(event) => update("newPrIntervalMs", Number(event.target.value))}
+                  min={1000}
+                  step={1000}
+                  value={Number.isFinite(form.newPrIntervalMs) ? form.newPrIntervalMs : ""}
+                  onChange={(event) => {
+                    const parsed = Number.parseInt(event.target.value, 10);
+                    update("newPrIntervalMs", Number.isFinite(parsed) ? parsed : Number.NaN);
+                  }}
                 />
               </label>
               <label>
                 <span>Unread Message Poll Interval (ms)</span>
                 <input
                   type="number"
-                  value={form.unreadMessageIntervalMs}
-                  onChange={(event) => update("unreadMessageIntervalMs", Number(event.target.value))}
+                  min={1000}
+                  step={1000}
+                  value={Number.isFinite(form.unreadMessageIntervalMs) ? form.unreadMessageIntervalMs : ""}
+                  onChange={(event) => {
+                    const parsed = Number.parseInt(event.target.value, 10);
+                    update("unreadMessageIntervalMs", Number.isFinite(parsed) ? parsed : Number.NaN);
+                  }}
                 />
               </label>
               <label>
@@ -230,25 +258,26 @@ export function SetupPage() {
             </div>
           </Card>
           <Card title="Bitbucket Pull Requests">
+            <p className="muted narrow-note">Use your Atlassian account email and a Bitbucket API token with repository and pull-request read access. App passwords are no longer supported.</p>
             <div className="form-grid">
               <label>
                 <span>Workspace</span>
                 <input
-                  placeholder="etqdev"
+                  placeholder="workspace-slug"
                   value={form.bitbucketWorkspace}
                   onChange={(event) => update("bitbucketWorkspace", event.target.value)}
                 />
               </label>
               <label>
-                <span>Username</span>
+                <span>Atlassian Account Email</span>
                 <input
-                  placeholder="your-bitbucket-username"
+                  placeholder="you@example.com"
                   value={form.bitbucketUsername}
                   onChange={(event) => update("bitbucketUsername", event.target.value)}
                 />
               </label>
               <label>
-                <span>App Password</span>
+                <span>Bitbucket API Token</span>
                 <input
                   type={showBitbucketAppPassword ? "text" : "password"}
                   name="bitbucket-app-password"
@@ -266,7 +295,7 @@ export function SetupPage() {
                   onChange={(event) => setShowBitbucketAppPassword(event.target.checked)}
                   type="checkbox"
                 />
-                <span>Show app password (use when paste only inserts one character — common with masked fields on macOS)</span>
+                <span>Show API token</span>
               </label>
               <label>
                 <span>Repositories</span>

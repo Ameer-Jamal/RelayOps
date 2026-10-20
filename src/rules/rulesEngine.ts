@@ -26,6 +26,7 @@ interface RulesEngineDependencies {
 export interface RuleExecutionResult {
   ruleId: string;
   executed: boolean;
+  failed?: boolean;
   reason: string;
   executionKey: string;
 }
@@ -188,7 +189,13 @@ export class RulesEngine {
         ...decisionContext,
         reason
       });
-      throw error;
+      return {
+        ruleId: rule.id,
+        executed: false,
+        failed: true,
+        reason,
+        executionKey
+      };
     }
   }
 

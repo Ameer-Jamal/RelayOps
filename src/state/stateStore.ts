@@ -322,14 +322,25 @@ export class SqliteStateStore implements StateStore {
     const existing = this.database
       .prepare(
         `
-          SELECT status
+          SELECT status, last_claimed_at
           FROM execution_keys
           WHERE execution_key = ?
         `
       )
-      .get(executionKey) as { status: string } | undefined;
+      .get(executionKey) as { status: string; last_claimed_at: string } | undefined;
 
-    if (existing?.status !== "failed") {
+    if (!existing) {
+      return false;
+    }
+
+    const staleInProgressMs = 15 * 60_000;
+    const claimedAtMs = Date.parse(existing.last_claimed_at);
+    const isStaleInProgress =
+      existing.status === "in_progress" &&
+      Number.isFinite(claimedAtMs) &&
+      Date.now() - claimedAtMs >= staleInProgressMs;
+
+    if (existing.status !== "failed" && !isStaleInProgress) {
       return false;
     }
 
@@ -344,10 +355,10 @@ export class SqliteStateStore implements StateStore {
             failed_at = NULL,
             failure_reason = NULL,
             payload_json = ?
-          WHERE execution_key = ? AND status = 'failed'
+          WHERE execution_key = ? AND status = ? AND last_claimed_at = ?
         `
       )
-      .run(now, JSON.stringify(event.payload ?? {}), executionKey);
+      .run(now, JSON.stringify(event.payload ?? {}), executionKey, existing.status, existing.last_claimed_at);
 
     return retried.changes > 0;
   }
