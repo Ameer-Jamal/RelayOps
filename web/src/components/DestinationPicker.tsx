@@ -79,6 +79,12 @@ export function DestinationPicker({ value, onChange, disabled = false, revision 
   }, [active, id, open, page]);
 
   function select(entry: TeamsDirectoryEntry) { onChange(entry); setOpen(false); trigger.current?.focus(); }
+  function changePage(nextOffset: number) {
+    // Disabling a focused pagination button can blur it to the document on Chromium.
+    // Move focus within the popup before loading so the picker stays open.
+    input.current?.focus();
+    setOffset(nextOffset);
+  }
   function search(nextQuery: string, nextKind = kind) {
     setQuery(nextQuery); setKind(nextKind); setOffset(0); setPage(null); setActive(0); setLoading(true);
   }
@@ -127,9 +133,9 @@ export function DestinationPicker({ value, onChange, disabled = false, revision 
           </ul>
           {!loading && !error && !options.length ? <p className="muted destination-empty">No matches. Try a different name or type.</p> : null}
           <div className="destination-pagination">
-            <button className="button button--ghost" type="button" disabled={loading || offset === 0} onClick={() => setOffset(Math.max(0, offset - 30))}>Previous</button>
+            <button className="button button--ghost" type="button" disabled={loading || offset === 0} onClick={() => changePage(Math.max(0, offset - 30))}>Previous</button>
             <span>{page?.matched ? `${offset + 1}–${offset + options.length} of ${page.matched}` : "0 results"}</span>
-            <button className="button button--ghost" type="button" disabled={loading || page?.nextOffset == null} onClick={() => setOffset(page!.nextOffset!)}>Next</button>
+            <button className="button button--ghost" type="button" disabled={loading || page?.nextOffset == null} onClick={() => changePage(page!.nextOffset!)}>Next</button>
           </div>
         </div>
       ) : null}

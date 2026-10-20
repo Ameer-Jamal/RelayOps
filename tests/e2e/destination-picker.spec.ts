@@ -14,6 +14,10 @@ test("2500 destinations stay paginated, searchable, and keyboard selectable", as
   await expect(page.getByRole("status").filter({ hasText: "2500 matching" })).toBeVisible();
   await page.getByRole("button", { name: "Next", exact: true }).click();
   await expect(page.getByText("31–60 of 2500")).toBeVisible();
+  await expect(search).toBeFocused();
+  await page.getByRole("button", { name: "Previous", exact: true }).click();
+  await expect(page.getByText("1–30 of 2500")).toBeVisible();
+  await expect(search).toBeFocused();
   await search.fill("2498");
   await expect(page.getByRole("listbox", { name: "Teams destinations" }).getByRole("option")).toHaveCount(1);
   await search.press("Enter");
