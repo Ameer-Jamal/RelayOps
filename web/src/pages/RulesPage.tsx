@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
-import type { RuleRecord, RulesConfigView, TargetRecord } from "@relayops/shared/adminApi";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { RuleRecord, RulesConfigView, TargetRecord, TeamsDirectoryEntry } from "@relayops/shared/adminApi";
+import { DestinationPicker, destinationLabel } from "../components/DestinationPicker";
 import { apiRequest } from "../api/client";
 import { Card, ErrorBanner, LoadingState, PageHeader, SuccessBanner } from "../components/Common";
 import { useApiData } from "../hooks/useApiData";
@@ -13,23 +14,40 @@ const EMPTY_RULE: RuleRecord = {
   actions: [{ type: "clear_alerts" }]
 };
 
-export function RulesPage() {
+export function RulesPage({ initialDestination = null }: { initialDestination?: TeamsDirectoryEntry | null }) {
   const loadRules = useCallback(() => apiRequest<RulesConfigView>("/api/rules-config"), []);
   const { data, loading, error, reload } = useApiData(loadRules);
   const [rules, setRules] = useState<RuleRecord[]>([]);
   const [targets, setTargets] = useState<TargetRecord[]>([]);
+  const [destinations, setDestinations] = useState<Record<string, TeamsDirectoryEntry>>(
+    initialDestination ? { [initialDestination.id]: initialDestination } : {}
+  );
   const [message, setMessage] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const draftAdded = useRef(false);
 
   useEffect(() => {
     if (!data) {
       return;
     }
 
-    setRules(data.rules);
+    if (initialDestination && !draftAdded.current) {
+      draftAdded.current = true;
+      let id = "message-draft";
+      let suffix = 1;
+      while (data.rules.some(rule => rule.id === id)) id = `message-draft-${suffix++}`;
+      setRules([...data.rules, { ...EMPTY_RULE, id, enabled: false,
+        actions: [{ type: "post_message", target: initialDestination.id, template: "" }] }]);
+      setMessage(`Unsaved rule draft for ${destinationLabel(initialDestination)}. Choose a trigger and message, then save. Enable it when ready.`);
+    } else setRules(data.rules);
     setTargets(data.targets);
-  }, [data]);
+  }, [data, initialDestination]);
 
   async function save(): Promise<void> {
+    setSaving(true);
+    setSaveError(null);
+    try {
     const result = await apiRequest<RulesConfigView>("/api/rules", {
       method: "PUT",
       body: JSON.stringify({ rules })
@@ -37,6 +55,8 @@ export function RulesPage() {
     setRules(result.rules);
     setMessage("Rules saved.");
     await reload();
+    } catch (error) { setSaveError(error instanceof Error ? error.message : String(error)); }
+    finally { setSaving(false); }
   }
 
   function updateRule(index: number, patch: Partial<RuleRecord>) {
@@ -53,14 +73,15 @@ export function RulesPage() {
             <button className="button button--secondary" onClick={() => setRules((current) => [...current, { ...EMPTY_RULE, id: `rule-${current.length + 1}` }])} type="button">
               Add Rule
             </button>
-            <button className="button" onClick={() => void save()} type="button">
-              Save Rules
+            <button className="button" disabled={saving || loading} onClick={() => void save()} type="button">
+              {saving ? "Saving…" : "Save Rules"}
             </button>
           </div>
         }
       />
       {message ? <SuccessBanner message={message} /> : null}
       {error ? <ErrorBanner message={error} /> : null}
+      {saveError ? <ErrorBanner message={saveError} /> : null}
       {loading && !data ? <LoadingState /> : null}
       <div className="editor-stack">
         {rules.map((rule, index) => (
@@ -192,6 +213,8 @@ export function RulesPage() {
                     }
                   >
                     <option value="">None</option>
+                    {rule.actions?.[0]?.target && !targets.some(target => target.name === rule.actions?.[0]?.target) ?
+                      <option value={rule.actions[0].target}>{destinations[rule.actions[0].target] ? destinationLabel(destinations[rule.actions[0].target]) : rule.actions[0].target} (exact destination)</option> : null}
                     {targets.map((target) => (
                       <option key={target.name} value={target.name}>
                         {target.name}
@@ -199,6 +222,13 @@ export function RulesPage() {
                     ))}
                   </select>
                 </label>
+                {rule.actions?.[0]?.type === "post_message" ? <DestinationPicker
+                  value={destinations[rule.actions[0].target ?? ""] ?? null}
+                  onChange={(entry) => {
+                    setDestinations(current => ({ ...current, [entry.id]: entry }));
+                    updateRule(index, { actions: [{ ...(rule.actions?.[0] ?? { type: "post_message" }), target: entry.id }] });
+                  }}
+                /> : null}
                 <label>
                   <span>Severity</span>
                   <select

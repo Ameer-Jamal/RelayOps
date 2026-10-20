@@ -17,19 +17,19 @@ const BUSY_LABELS: Record<BusyKey, string> = {
   "teams-open": "Opening Teams in the automation browser…",
   "teams-validate": "Validating Teams session…",
   "run-trigger": "Running rules for this trigger…",
-  "test-post": "Sending test message (Teams navigation can take 30–60 s)…",
+  "test-post": "Sending Teams message…",
   "validate-config": "Validating configuration…",
   "clear-alerts": "Clearing alerts…"
 };
 
-export function ActionsPage() {
+export function ActionsPage({ initialDestination = null }: { initialDestination?: TeamsDirectoryEntry | null }) {
   const loadTargets = useCallback(() => apiRequest<TargetRecord[]>("/api/targets"), []);
   const { data: targets } = useApiData(loadTargets);
   const [trigger, setTrigger] = useState<"new_pr" | "unread_message" | "manual">("new_pr");
   const [ignoreGuards, setIgnoreGuards] = useState(false);
-  const [selectedDestination, setSelectedDestination] = useState<TeamsDirectoryEntry | null>(null);
-  const [target, setTarget] = useState<string>("");
-  const [text, setText] = useState<string>("RelayOps test message");
+  const [selectedDestination, setSelectedDestination] = useState<TeamsDirectoryEntry | null>(initialDestination);
+  const [target, setTarget] = useState<string>(initialDestination?.id ?? "");
+  const [text, setText] = useState<string>(initialDestination ? "" : "RelayOps test message");
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
@@ -156,9 +156,9 @@ export function ActionsPage() {
             {busyKey === "run-trigger" ? "Running…" : "Run Trigger"}
           </button>
         </Card>
-        <Card title="Test Teams Post">
+        <Card title="Compose Teams Message">
           <p className="muted narrow-note">
-            Waits for the real send to finish. Keep the automation browser window visible; the API call can take up to a minute.
+            Choose a recipient, write your message, and press Send Message. Selecting a recipient sends nothing.
           </p>
           <div className="form-grid">
             <DestinationPicker value={selectedDestination} disabled={isBusy} onChange={(entry) => { setSelectedDestination(entry); setTarget(entry.id); }} />
@@ -180,7 +180,7 @@ export function ActionsPage() {
               <ErrorBanner message="This target still uses the public example placeholder. Update the target label in the Targets page before sending a test post." />
             ) : null}
             <label>
-              <span>Text</span>
+              <span>Message</span>
               <textarea rows={5} value={text} disabled={isBusy} onChange={(event) => setText(event.target.value)} />
             </label>
           </div>
@@ -195,12 +195,12 @@ export function ActionsPage() {
                     method: "POST",
                     body: JSON.stringify({ target, text })
                   }),
-                "Teams test post completed."
+                "Teams message sent."
               )
             }
             type="button"
           >
-            {busyKey === "test-post" ? "Sending…" : "Send Test Post"}
+            {busyKey === "test-post" ? "Sending…" : "Send Message"}
           </button>
         </Card>
         <Card title="Validation">

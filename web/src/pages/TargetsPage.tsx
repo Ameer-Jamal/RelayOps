@@ -12,7 +12,10 @@ const EMPTY_TARGET: TargetRecord = {
   url: ""
 };
 
-export function TargetsPage() {
+export function TargetsPage({ onCompose, onCreateRule }: {
+  onCompose: (entry: TeamsDirectoryEntry) => void;
+  onCreateRule: (entry: TeamsDirectoryEntry) => void;
+}) {
   const loadTargets = useCallback(() => apiRequest<TargetRecord[]>("/api/targets"), []);
   const { data, loading, error, reload } = useApiData(loadTargets);
   const [targets, setTargets] = useState<TargetRecord[]>([]);
@@ -26,6 +29,8 @@ export function TargetsPage() {
   const [refreshing, setRefreshing] = useState(false);
   const isDiscovering = discovering || refreshing;
   const [selected, setSelected] = useState<TeamsDirectoryEntry | null>(null);
+  const [shortcutName, setShortcutName] = useState("");
+  const [showShortcut, setShowShortcut] = useState(false);
   const [revision, setRevision] = useState(0);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -67,6 +72,29 @@ export function TargetsPage() {
     catch { setSaveError("Could not copy automatically. Select and copy the conversation ID below."); }
   }
 
+  async function saveShortcut() {
+    if (!selected) return;
+    const name = shortcutName.trim();
+    setSaveError(null);
+    if (!name) { setSaveError("Enter a shortcut name."); return; }
+    if (targets.some(target => target.name.toLowerCase() === name.toLowerCase())) {
+      setSaveError("That shortcut name already exists. Choose another name or edit the existing alias."); return;
+    }
+    setSaving(true);
+    try {
+      const result = await apiRequest<RulesConfigView>("/api/targets", {
+        method: "PUT", body: JSON.stringify({ targets: [...targets, {
+          name, kind: selected.kind, label: destinationLabel(selected), url: selected.url
+        }] })
+      });
+      setTargets(result.targets);
+      setShowShortcut(false);
+      setMessage(`Shortcut "${name}" saved. Use it as a target in rules or MCP calls.`);
+      await reload();
+    } catch (error) { setSaveError(error instanceof Error ? error.message : String(error)); }
+    finally { setSaving(false); }
+  }
+
   function update(index: number, patch: Partial<TargetRecord>) {
     setTargets((current) => current.map((target, targetIndex) => (targetIndex === index ? { ...target, ...patch } : target)));
   }
@@ -93,7 +121,7 @@ export function TargetsPage() {
       {saveError ? <ErrorBanner message={saveError} /> : null}
       <Card title="Your Teams Directory">
         <div className="directory-toolbar">
-          <DestinationPicker value={selected} onChange={setSelected} disabled={isDiscovering} revision={revision} />
+          <DestinationPicker value={selected} onChange={(entry) => { setSelected(entry); setShowShortcut(false); setShortcutName(destinationLabel(entry)); }} disabled={isDiscovering} revision={revision} />
           <button className="button button--secondary" type="button" disabled={isDiscovering} onClick={() => void refreshDirectory()}>
             {isDiscovering ? "Discovering…" : "Refresh Directory"}
           </button>
@@ -111,11 +139,22 @@ export function TargetsPage() {
           <div className="directory-entry" aria-label="Selected destination">
             <div><strong>{destinationLabel(selected)}</strong><p className="muted">{selected.memberEmails.join(", ") || selected.kind}</p><code className="directory-id">{selected.id}</code></div>
             <div className="button-row">
+              <button className="button" type="button" onClick={() => onCompose(selected)}>Compose message</button>
+              <button className="button button--secondary" type="button" onClick={() => onCreateRule(selected)}>Use in a rule</button>
+              <button className="button button--secondary" type="button" disabled={loading || saving} onClick={() => setShowShortcut(true)}>Save shortcut</button>
               <a className="button button--secondary" href={selected.url} target="_blank" rel="noreferrer">Open in Teams</a>
               <button className="button button--ghost" type="button" onClick={() => void copyId(selected.id)}>{copiedId === selected.id ? "Copied" : "Copy ID"}</button>
             </div>
           </div>
         ) : <p className="muted">Open the picker to search by name, email, team, or ID. Results are filtered on the server and shown 30 at a time.</p>}
+        {selected && showShortcut ? <form className="subsection" onSubmit={(event) => { event.preventDefault(); void saveShortcut(); }}>
+          <label><span>Shortcut name</span><input autoFocus value={shortcutName} disabled={saving} onChange={(event) => setShortcutName(event.target.value)} /></label>
+          <p className="muted">A shortcut keeps this exact Teams destination available under a friendly name.</p>
+          <div className="button-row">
+            <button className="button" type="submit" disabled={saving || !shortcutName.trim()}>{saving ? "Saving…" : "Save Shortcut"}</button>
+            <button className="button button--ghost" type="button" disabled={saving} onClick={() => setShowShortcut(false)}>Cancel</button>
+          </div>
+        </form> : null}
       </Card>
       <details className="card optional-aliases">
         <summary>Optional Named Aliases</summary>

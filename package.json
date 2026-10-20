@@ -1,6 +1,6 @@
 {
   "name": "relayops",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Public-first, local-first automation platform for browser-driven workflows.",
   "license": "MIT",
   "private": true,

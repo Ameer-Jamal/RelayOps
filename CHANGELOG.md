@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1 — 2026-10-20
+
+- Selected Teams destinations now offer Compose message, Use in a rule, and Save shortcut.
+- Composer handoff preserves the exact recipient and starts with an empty message.
+- Rule handoff creates an unsaved, disabled draft; direct destinations are selectable in the rule editor.
+- Shortcuts save the exact Teams link and reject duplicate names.
+- Added browser coverage for recipient handoff, disabled drafts, and shortcut persistence.
+
 ## 0.2.0 — 2026-10-20
 
 ### Added

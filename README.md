@@ -40,7 +40,7 @@ npm start
 
 Open **[localhost:4317](http://127.0.0.1:4317)**. Initial setup works without credentials. Copy `.env.example` to `.env` and `rules.example.yaml` to `rules.local.yaml` when you want local configuration files. Polling and startup Teams validation are disabled by default.
 
-In **Manual Actions**, open/validate the Teams session and sign in through the dedicated browser window. Then open **Targets** to discover your accessible destinations. Use the dropdown to search by name, email, team, or conversation ID. Discovery sends no messages. The same picker is available when composing a manual test post.
+In **Manual Actions**, open/validate the Teams session and sign in through the dedicated browser window. Then open **Targets** to discover your accessible destinations. Use the dropdown to search by name, email, team, or conversation ID. Discovery sends no messages. After selecting a destination, choose **Compose message** to open an empty message addressed to that exact conversation, **Use in a rule** to create an unsaved disabled rule draft, or **Save shortcut** to give it a reusable alias. The same picker is available in the composer and rule editor. Selecting a destination or creating a draft does not send anything; messages require Send Message and rules require saving/enabling.
 
 ### From a release
 

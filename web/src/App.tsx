@@ -7,6 +7,7 @@ import { ActionsPage } from "./pages/ActionsPage";
 import { LogsPage } from "./pages/LogsPage";
 import { TargetsPage } from "./pages/TargetsPage";
 import { RulesPage } from "./pages/RulesPage";
+import type { TeamsDirectoryEntry } from "@relayops/shared/adminApi";
 
 const NAV_ITEMS: NavItem[] = [
   { key: "dashboard", label: "Dashboard" },
@@ -25,6 +26,13 @@ function getPageFromHash(): string {
 
 export function App() {
   const [page, setPage] = useState<string>(getPageFromHash());
+  const [destination, setDestination] = useState<TeamsDirectoryEntry | null>(null);
+
+  function useDestination(entry: TeamsDirectoryEntry, nextPage: string) {
+    setDestination(entry);
+    window.location.hash = nextPage;
+    setPage(nextPage);
+  }
 
   useEffect(() => {
     const onHashChange = () => {
@@ -44,24 +52,25 @@ export function App() {
       case "alerts":
         return <AlertsPage />;
       case "actions":
-        return <ActionsPage />;
+        return <ActionsPage initialDestination={destination} />;
       case "logs":
         return <LogsPage />;
       case "targets":
-        return <TargetsPage />;
+        return <TargetsPage onCompose={(entry) => useDestination(entry, "actions")} onCreateRule={(entry) => useDestination(entry, "rules")} />;
       case "rules":
-        return <RulesPage />;
+        return <RulesPage initialDestination={destination} />;
       case "dashboard":
       default:
         return <DashboardPage />;
     }
-  }, [page]);
+  }, [page, destination]);
 
   return (
     <AppShell
       currentPage={page}
       items={NAV_ITEMS}
       onNavigate={(nextPage) => {
+        setDestination(null);
         window.location.hash = nextPage;
         setPage(nextPage);
       }}
